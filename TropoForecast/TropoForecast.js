@@ -10,18 +10,18 @@
     ////////////////////////////////////////////////////////////////
 
     // ------------- Configuration ----------------
-    const pluginSetupOnlyNotify = true;
+    const pluginSetupOnlyNotify = false; // Changed to false to show updates outside of /setup
     const CHECK_FOR_UPDATES = true;
-    // Changing this version invalidates old caches to prevent "0 frames" errors
-    const CACHE_VERSION = '1.0'; 
 
     ///////////////////////////////////////////////////////////////
 
     // Plugin metadata
     const pluginVersion = '1.0';
-    const pluginName = "Tropo";
+	const CACHE_VERSION = pluginVersion;
+    const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
-    const pluginUpdateUrl = "https://raw.githubusercontent.com/Highpoint2000/TropoForecast/main/TropoForecast.js";
+    // Corrected URL: Added the missing /TropoForecast/ subfolder
+    const pluginUpdateUrl = "https://raw.githubusercontent.com/Highpoint2000/TropoForecast/main/TropoForecast/TropoForecast.js";
     let isAuth = false;
 
     // WebSocket endpoint for GPS data
@@ -58,9 +58,11 @@
 
         // Function to check for updates
         async function fetchFirstLine() {
-            const urlCheckForUpdate = urlFetchLink;
+            // Added cache buster to the URL
+            const urlCheckForUpdate = urlFetchLink + '?t=' + new Date().getTime();
             try {
-                const response = await fetch(urlCheckForUpdate);
+                // Added { cache: 'no-store' } to strictly bypass the browser cache
+                const response = await fetch(urlCheckForUpdate, { cache: 'no-store' });
                 if (!response.ok) {
                     throw new Error(`[${pluginName}] update check HTTP error! status: ${response.status}`);
                 }
@@ -133,15 +135,15 @@
         if (!ws || ws.readyState === WebSocket.CLOSED) {
             try {
                 ws = new WebSocket(WS_URL);
-                ws.addEventListener('open', () => console.log('[Tropo] WebSocket connected'));
+                ws.addEventListener('open', () => console.log('[TropoForecast] WebSocket connected'));
                 ws.addEventListener('message', handleMessage);
-                ws.addEventListener('error', e => console.error('[Tropo] WebSocket error', e));
+                ws.addEventListener('error', e => console.error('[TropoForecast] WebSocket error', e));
                 ws.addEventListener('close', e => {
-                    console.log('[Tropo] WebSocket closed', e);
+                    console.log('[TropoForecast] WebSocket closed', e);
                     setTimeout(setupWebSocket, 5000);
                 });
             } catch (err) {
-                console.error('[Tropo] WebSocket setup failed', err);
+                console.error('[TropoForecast] WebSocket setup failed', err);
                 sendToast('error important', pluginName, 'WebSocket setup failed', false, false);
                 setTimeout(setupWebSocket, 5000);
             }
@@ -182,7 +184,7 @@
                 }
             }
         } catch (e) {
-            console.error('[Tropo] Error parsing message', e, evt.data);
+            console.error('[TropoForecast] Error parsing message', e, evt.data);
         }
     }
 
@@ -585,7 +587,7 @@
         const currentHour = getLastFullHour();
         
         if (currentHour !== lastHourChecked) {
-            console.log(`[Tropo] Hour changed from ${lastHourChecked} to ${currentHour}. Reloading data...`);
+            console.log(`[TropoForecast] Hour changed from ${lastHourChecked} to ${currentHour}. Reloading data...`);
             lastHourChecked = currentHour;
             loadDataForRadius(parseInt(lastSelectedRadius));
         }
@@ -620,17 +622,17 @@
                 // Check if cache is still valid (less than 1 hour old)
                 const cacheAge = Date.now() - cached.timestamp;
                 if (cacheAge < 3600000) { // 1 hour
-                    console.log('[Tropo] Using cached data');
+                    console.log('[TropoForecast] Using cached data');
                     return { results: cached.results, bounds };
                 }
-                console.log('[Tropo] Cache expired, fetching fresh data');
+                console.log('[TropoForecast] Cache expired, fetching fresh data');
             } catch(e) {
-                console.warn("[Tropo] Invalid cache, fetching fresh.");
+                console.warn("[TropoForecast] Invalid cache, fetching fresh.");
             }
         }
 
         // Fetch new data
-        console.log('[Tropo] Fetching fresh data from API');
+        console.log('[TropoForecast] Fetching fresh data from API');
         
         const apiLats = [];
         const apiLons = [];
@@ -646,7 +648,7 @@
             }
         }
 
-        console.log('[Tropo] Requesting', apiLats.length, 'grid points');
+        console.log('[TropoForecast] Requesting', apiLats.length, 'grid points');
         
         const levels = [1000, 975, 950, 925, 900, 875, 850];
         let params = [];
@@ -671,11 +673,11 @@
         } else if(Array.isArray(json)) {
             results = json;
         } else {
-            console.error('[Tropo] Unexpected API response:', json);
+            console.error('[TropoForecast] Unexpected API response:', json);
             throw new Error("Invalid API response format");
         }
 
-        console.log('[Tropo] Parsed', results.length, 'result objects');
+        console.log('[TropoForecast] Parsed', results.length, 'result objects');
 
         // Cache the data with error handling for QuotaExceededError
         try {
@@ -686,10 +688,10 @@
 
             try {
                 localStorage.setItem(cacheKey, cachePayload);
-                console.log('[Tropo] Data cached successfully');
+                console.log('[TropoForecast] Data cached successfully');
             } catch (e) {
                 if (e.name === 'QuotaExceededError' || e.code === 22) {
-                    console.warn('[Tropo] Storage quota exceeded. Clearing old cache...');
+                    console.warn('[TropoForecast] Storage quota exceeded. Clearing old cache...');
                     
                     // Clear all Tropo related items to free up space
                     Object.keys(localStorage)
@@ -698,13 +700,13 @@
                     
                     // Try again
                     localStorage.setItem(cacheKey, cachePayload);
-                    console.log('[Tropo] Data cached after cleanup');
+                    console.log('[TropoForecast] Data cached after cleanup');
                 } else {
                     throw e;
                 }
             }
         } catch (e) {
-            console.error('[Tropo] Could not cache data (proceeding without cache):', e);
+            console.error('[TropoForecast] Could not cache data (proceeding without cache):', e);
         }
         
         return { results, bounds };
@@ -720,16 +722,16 @@
         if(QTH_LAT && QTH_LON) {
              targetLat = parseFloat(QTH_LAT);
              targetLon = parseFloat(QTH_LON);
-             console.log(`[Tropo] Prefetching data for QTH: ${targetLat}, ${targetLon}`);
-             fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[Tropo] Background fetch failed:", e));
+             console.log(`[TropoForecast] Prefetching data for QTH: ${targetLat}, ${targetLon}`);
+             fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[TropoForecast] Background fetch failed:", e));
         } 
         // Fallback to Geolocation
         else if ("geolocation" in navigator) {
              navigator.geolocation.getCurrentPosition(p => {
                   targetLat = p.coords.latitude;
                   targetLon = p.coords.longitude;
-                  console.log(`[Tropo] Prefetching data for Geo: ${targetLat}, ${targetLon}`);
-                  fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[Tropo] Background fetch failed:", e));
+                  console.log(`[TropoForecast] Prefetching data for Geo: ${targetLat}, ${targetLon}`);
+                  fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[TropoForecast] Background fetch failed:", e));
              });
         }
     }
@@ -812,7 +814,7 @@
             lastHourChecked = nowHour;
             const maxLen = results[0] && results[0].hourly && results[0].hourly.time ? results[0].hourly.time.length : 0;
 
-            console.log('[Tropo] Processing frames starting from hour index:', nowHour);
+            console.log('[TropoForecast] Processing frames starting from hour index:', nowHour);
 
             for(let h=0; h<24; h++) {
                 const hourIdx = nowHour + h;
@@ -837,7 +839,7 @@
                 });
             }
 
-            console.log('[Tropo] Created', frames.length, 'frames total');
+            console.log('[TropoForecast] Created', frames.length, 'frames total');
 
             const slider = document.getElementById('tropo-timeline');
             if(slider && frames.length > 0) {
@@ -866,7 +868,7 @@
             }
 
         } catch(e) {
-            console.error('[Tropo] Error:', e);
+            console.error('[TropoForecast] Error:', e);
             if(statusEl) {
                 statusEl.innerText = '⚠️ Error: ' + e.message;
                 setTimeout(() => { statusEl.style.display='none'; }, 5000);
@@ -1398,7 +1400,7 @@
         const text = document.body.textContent || document.body.innerText;
         isAuth = text.includes('You are logged in as an administrator.')
             || text.includes('You are logged in as an adminstrator.');
-        console.log(isAuth ? '[Tropo] Admin authentication OK' : '[Tropo] Admin authentication failed');
+        console.log(isAuth ? '[TropoForecast] Admin authentication OK' : '[TropoForecast] Admin authentication failed');
     }
 
     setupWebSocket();
