@@ -3,18 +3,15 @@ Local and regional tropo forecast for FMDX web server
 
 ![TropoForecast](https://github.com/user-attachments/assets/50f61070-be46-4c8b-ab51-62a7525cd925)
 
-## Version 1.0
+## Version 1.1
 
-- Uses vertical refractive profiles (N according to ITU logic via temperature, humidity, and pressure)
-- Considers pressure levels (1000–850 hPa) with elevation gradients
-- Searches for strongly superrefractive gradients (threshold ~ −60 N/km instead of just "something below −39 N/km")
-- Additionally considers wind shear in the layer with the strongest gradient, including conversion of direction/speed to u/v components
-- Cleanly scales the result to a 0–10 index (based on Hepburn)
+- Increased map brightness and contrast
+- Added Tropo Index display to the button
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
 
-## Installation notes:
+## Installation notes
 
 1. [Download](https://github.com/Highpoint2000/TropoForecast/releases) the last repository as a zip
 2. Unpack all files from the plugins folder to ..fm-dx-webserver-main\plugins\ 
@@ -30,4 +27,13 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <a href="https://www.buymeacoffee.com/Highpoint" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
+<details>
+<summary>History</summary>
 
+### Version 1.0
+
+- Uses vertical refractive profiles (N according to ITU logic via temperature, humidity, and pressure)
+- Considers pressure levels (1000–850 hPa) with elevation gradients
+- Searches for strongly superrefractive gradients (threshold ~ −60 N/km instead of just "something below −39 N/km")
+- Additionally considers wind shear in the layer with the strongest gradient, including conversion of direction/speed to u/v components
+- Cleanly scales the result to a 0–10 index (based on Hepburn)

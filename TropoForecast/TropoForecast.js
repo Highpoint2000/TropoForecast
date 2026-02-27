@@ -1,26 +1,25 @@
 (() => {
     ////////////////////////////////////////////////////////////////
     ///                                                          ///
-    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER (V1.0)       ///
+    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER        V1.1   ///
     ///                                                          ///
-    ///  by Highpoint                last update: 2026-02-26     ///
+    ///  by Highpoint                last update: 2026-02-27     ///
     ///                                                          ///
-    ///  https://github.com/Highpoint2000/TropoForecast         ///
+    ///  https://github.com/Highpoint2000/TropoForecast          ///
     ///                                                          ///
     ////////////////////////////////////////////////////////////////
 
     // ------------- Configuration ----------------
-    const pluginSetupOnlyNotify = false; // Changed to false to show updates outside of /setup
+    const pluginSetupOnlyNotify = false; 
     const CHECK_FOR_UPDATES = true;
 
     ///////////////////////////////////////////////////////////////
 
     // Plugin metadata
-    const pluginVersion = '1.0';
-	const CACHE_VERSION = pluginVersion;
+    const pluginVersion = '1.1';
+    const CACHE_VERSION = pluginVersion;
     const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
-    // Corrected URL: Added the missing /TropoForecast/ subfolder
     const pluginUpdateUrl = "https://raw.githubusercontent.com/Highpoint2000/TropoForecast/main/TropoForecast/TropoForecast.js";
     let isAuth = false;
 
@@ -58,10 +57,8 @@
 
         // Function to check for updates
         async function fetchFirstLine() {
-            // Added cache buster to the URL
             const urlCheckForUpdate = urlFetchLink + '?t=' + new Date().getTime();
             try {
-                // Added { cache: 'no-store' } to strictly bypass the browser cache
                 const response = await fetch(urlCheckForUpdate, { cache: 'no-store' });
                 if (!response.ok) {
                     throw new Error(`[${pluginName}] update check HTTP error! status: ${response.status}`);
@@ -89,7 +86,6 @@
             }
         }
 
-        // Check for updates
         fetchFirstLine().then(newVersion => {
             if (newVersion) {
                 if (newVersion !== pluginVersionCheck) {
@@ -115,15 +111,17 @@
                 }
 
                 const updateIcon = document.querySelector('.wrapper-outer #navigation .sidenav-content .fa-puzzle-piece') || document.querySelector('.wrapper-outer .sidenav-content') || document.querySelector('.sidenav-content');
-                const redDot = document.createElement('span');
-                redDot.style.display = 'block';
-                redDot.style.width = '12px';
-                redDot.style.height = '12px';
-                redDot.style.borderRadius = '50%';
-                redDot.style.backgroundColor = '#FE0830';
-                redDot.style.marginLeft = '82px';
-                redDot.style.marginTop = '-12px';
-                updateIcon.appendChild(redDot);
+                if (updateIcon) {
+                    const redDot = document.createElement('span');
+                    redDot.style.display = 'block';
+                    redDot.style.width = '12px';
+                    redDot.style.height = '12px';
+                    redDot.style.borderRadius = '50%';
+                    redDot.style.backgroundColor = '#FE0830';
+                    redDot.style.marginLeft = '82px';
+                    redDot.style.marginTop = '-12px';
+                    updateIcon.appendChild(redDot);
+                }
             }
         }
     }
@@ -159,6 +157,9 @@
                 
                 // Update GPS data if active
                 if (status === 'active' && lat && lon) {
+                    const prevLat = gpsData.lat;
+                    const prevLon = gpsData.lon;
+
                     gpsData.lat = lat;
                     gpsData.lon = lon;
                     gpsData.alt = alt || null;
@@ -170,14 +171,15 @@
                     // Update map marker continuously
                     if (container && container.style.display !== 'none') {
                         if (!mapInstance || !positionMarker) {
-                            // Create marker if it does not exist
-                            if (mapInstance) {
-                                drawPositionMarker(lat, lon);
-                            }
+                            if (mapInstance) drawPositionMarker(lat, lon);
                         } else {
-                            // Update marker position if it exists
                             updateMapMarker();
                         }
+                    }
+
+                    // Trigger button indicator update if location changed significantly
+                    if (prevLat === null || Math.abs(prevLat - lat) > 0.05 || Math.abs(prevLon - lon) > 0.05) {
+                        updateCurrentTropoIndicator();
                     }
                 } else {
                     gpsData.status = 'inactive';
@@ -194,7 +196,7 @@
         renderRes: 1024,
         defaultRadius: 500,
         blurAmount: 'blur(1px)',
-        opacity: 0.60 // SET TO 60% TRANSPARENCY
+        opacity: 0.60
     };
 
     const PALETTE = [
@@ -230,6 +232,11 @@
     let hourUpdateInterval = null;
     let lastHourChecked = -1;
 
+    // Variables for button indicator
+    let lastIndicatorFetchTime = 0;
+    let lastIndicatorLat = null;
+    let lastIndicatorLon = null;
+
     function loadLeaflet(callback) {
         if (window.L) { callback(); return; }
         const css = document.createElement('link');
@@ -255,18 +262,6 @@
         return (77.6 / tempK) * (pressureHPa + 4810 * (e / tempK));
     }
 
-    /**
-     * Calculate wind shear magnitude between two pressure levels.
-     * Wind shear (dV/dh) indicates mechanical turbulence or stable layer boundaries.
-     * Strong shear at an inversion boundary supports and maintains ducting layers.
-     *
-     * @param {number} uLow  - U-component (m/s) at lower level
-     * @param {number} vLow  - V-component (m/s) at lower level
-     * @param {number} uUp   - U-component (m/s) at upper level
-     * @param {number} vUp   - V-component (m/s) at upper level
-     * @param {number} dh    - Height difference between levels (km)
-     * @returns {number} Wind shear magnitude in (m/s)/km
-     */
     function calcWindShear(uLow, vLow, uUp, vUp, dh) {
         const du = uUp - uLow;
         const dv = vUp - vLow;
@@ -283,7 +278,6 @@
             const lowerP = levels[i];
             const upperP = levels[i+1];
             
-            // Safety check for missing data
             if (!hourly[`temperature_${lowerP}hPa`] || !hourly[`temperature_${upperP}hPa`]) continue;
 
             const tLow = hourly[`temperature_${lowerP}hPa`][idx];
@@ -299,23 +293,16 @@
             const dn = nUp - nLow;
             const gradient = dn / dh;
 
-            // Standard atmosphere gradient is approx. -39 N/km.
-            // Only consider gradients significantly below normal as potential ducting.
-            // -60 N/km filters out normal atmospheric variations and triggers
-            // only when genuine superrefractive conditions begin to develop.
             if (gradient < -60) {
                 if (Math.abs(gradient) > maxGradientMag) {
                     maxGradientMag = Math.abs(gradient);
 
-                    // Calculate wind shear at this layer if wind data is available
                     const wsLow = hourly[`wind_speed_${lowerP}hPa`] ? hourly[`wind_speed_${lowerP}hPa`][idx] : undefined;
                     const wdLow = hourly[`wind_direction_${lowerP}hPa`] ? hourly[`wind_direction_${lowerP}hPa`][idx] : undefined;
                     const wsUp  = hourly[`wind_speed_${upperP}hPa`]  ? hourly[`wind_speed_${upperP}hPa`][idx]  : undefined;
                     const wdUp  = hourly[`wind_direction_${upperP}hPa`]  ? hourly[`wind_direction_${upperP}hPa`][idx]  : undefined;
 
                     if (wsLow !== undefined && wdLow !== undefined && wsUp !== undefined && wdUp !== undefined) {
-                        // Convert wind speed + direction (meteorological) to u/v components
-                        // Meteorological convention: direction is where wind comes FROM
                         const wdLowRad = (wdLow * Math.PI) / 180;
                         const wdUpRad  = (wdUp  * Math.PI) / 180;
 
@@ -330,43 +317,188 @@
             }
         }
 
-        // Minimum threshold: gradient must exceed 60 N/km magnitude
-        // to register any tropo activity at all
         if (maxGradientMag < 60) return 0;
 
-        // Base index from refractivity gradient (0-10 scale)
-        // At 60 N/km = index 0 (just above threshold)
-        // At 260 N/km = index 10 (extreme ducting)
         let index = (maxGradientMag - 60) / 20;
 
-        // Wind shear enhancement factor:
-        // Moderate shear (5-15 m/s/km) at a ducting layer indicates a stable, well-defined
-        // inversion that supports and sustains tropospheric propagation.
-        // Very high shear (>25 m/s/km) can break up the duct through turbulent mixing,
-        // so the bonus tapers off at extreme shear values.
-        //
-        // Shear ranges and their contribution:
-        //   0 -  5 m/s/km  : No bonus (calm, weak boundary)
-        //   5 - 10 m/s/km  : Moderate bonus (up to +1.0) - duct forming
-        //  10 - 20 m/s/km  : Strong bonus (up to +2.0) - well-maintained duct
-        //  20 - 30 m/s/km  : Peak bonus (+2.0) then tapering - duct may start breaking
-        //  30+  m/s/km     : Reduced bonus - excessive turbulence disrupts ducting
         if (shearAtMaxGradient > 5) {
             let shearBonus;
             if (shearAtMaxGradient <= 20) {
-                // Linear ramp from 0 to +2.0 between 5 and 20 m/s/km
                 shearBonus = ((shearAtMaxGradient - 5) / 15) * 2.0;
             } else if (shearAtMaxGradient <= 30) {
-                // Taper from +2.0 down to +1.0 between 20 and 30 m/s/km
                 shearBonus = 2.0 - ((shearAtMaxGradient - 20) / 10) * 1.0;
             } else {
-                // Above 30 m/s/km: fixed small bonus, turbulence dominates
                 shearBonus = 1.0;
             }
             index += shearBonus;
         }
 
         return Math.max(0, Math.min(10, index));
+    }
+
+    // --- INDICATOR BUTTON LOGIC ---
+    
+    // Dynamically fetch and display the current location's Tropo value under the toolbar button
+    async function updateCurrentTropoIndicator() {
+        let lat, lon;
+        
+        // Use GPS or fallback to QTH coordinates
+        if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
+            lat = parseFloat(gpsData.lat);
+            lon = parseFloat(gpsData.lon);
+        } else if (QTH_LAT && QTH_LON) {
+            lat = parseFloat(QTH_LAT);
+            lon = parseFloat(QTH_LON);
+        } else {
+            return; // No location available yet
+        }
+
+        // 1. PERFECT SYNC: Try to use currently rendered map data if the map is active
+        if (apiBounds && frames.length > 0 && frames[currentFrameIndex]) {
+            const val = interpolateGridValue(lat, lon, frames[currentFrameIndex].visValues, apiBounds);
+            let colorObj = PALETTE[0];
+            let colorIdx = 0;
+            if (val > 0.5) {
+                colorIdx = Math.round(val);
+                colorObj = PALETTE[Math.max(0, Math.min(colorIdx, 10))];
+            }
+            applyIndicatorColor(colorObj.color, colorObj.label, colorIdx);
+            return;
+        }
+
+        // 2. BACKGROUND SYNC: Try to use cached grid data so it matches the map even before opening
+        const r = parseInt(lastSelectedRadius || CONFIG.defaultRadius);
+        const cacheKey = `tropo_v${CACHE_VERSION}_${Math.round(lat * 100)}_${Math.round(lon * 100)}_${r}`;
+        const cachedDataStr = localStorage.getItem(cacheKey);
+
+        if (cachedDataStr) {
+            try {
+                const cached = JSON.parse(cachedDataStr);
+                const bounds = calculateBounds(lat, lon, r);
+                const results = cached.results;
+                
+                if (results && results[0] && results[0].hourly) {
+                    const utcNow = new Date();
+                    const currentIso = utcNow.toISOString().slice(0, 13) + ':00';
+                    let idx = results[0].hourly.time.findIndex(t => t === currentIso);
+                    if (idx === -1) idx = utcNow.getUTCHours();
+                    
+                    const visValues = new Float32Array(results.length);
+                    for(let i = 0; i < results.length; i++) {
+                        if (results[i] && results[i].hourly) {
+                            visValues[i] = calculateTropoIndexPrecise(results[i].hourly, idx);
+                        }
+                    }
+                    
+                    const val = interpolateGridValue(lat, lon, visValues, bounds);
+                    let colorObj = PALETTE[0];
+                    let colorIdx = 0;
+                    if (val > 0.5) {
+                        colorIdx = Math.round(val);
+                        colorObj = PALETTE[Math.max(0, Math.min(colorIdx, 10))];
+                    }
+                    applyIndicatorColor(colorObj.color, colorObj.label, colorIdx);
+                    return; // Successfully updated from cache
+                }
+            } catch (e) {
+                console.warn('[TropoForecast] Could not read cache for indicator, falling back to API', e);
+            }
+        }
+
+        // 3. FALLBACK: Single point API fetch if no grid cache is available
+        const now = Date.now();
+        const locChanged = lastIndicatorLat === null || Math.abs(lastIndicatorLat - lat) > 0.05 || Math.abs(lastIndicatorLon - lon) > 0.05;
+        
+        if (!locChanged && (now - lastIndicatorFetchTime < 15 * 60 * 1000)) {
+            return;
+        }
+
+        lastIndicatorFetchTime = now;
+        lastIndicatorLat = lat;
+        lastIndicatorLon = lon;
+
+        try {
+            const levels = [1000, 975, 950, 925, 900, 875, 850];
+            let params = [];
+            levels.forEach(l => {
+                params.push(`temperature_${l}hPa`);
+                params.push(`relative_humidity_${l}hPa`);
+                params.push(`wind_speed_${l}hPa`);
+                params.push(`wind_direction_${l}hPa`);
+            });
+            
+            const fetchUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${params.join(',')}&forecast_days=2&models=best_match`;
+            const resp = await fetch(fetchUrl);
+            if (!resp.ok) return;
+            const json = await resp.json();
+            
+            if (json && json.hourly && json.hourly.time) {
+                const utcNow = new Date();
+                const currentIso = utcNow.toISOString().slice(0, 13) + ':00'; 
+                let idx = json.hourly.time.findIndex(t => t === currentIso);
+                
+                if (idx === -1) {
+                    idx = utcNow.getUTCHours(); 
+                }
+                
+                if (idx !== -1) {
+                    const indexVal = calculateTropoIndexPrecise(json.hourly, idx);
+                    let colorObj = PALETTE[0];
+                    let colorIdx = 0;
+                    if (indexVal > 0.5) {
+                        colorIdx = Math.round(indexVal);
+                        colorObj = PALETTE[Math.max(0, Math.min(colorIdx, 10))];
+                    }
+                    
+                    applyIndicatorColor(colorObj.color, colorObj.label, colorIdx);
+                }
+            }
+        } catch (e) {
+            console.error('[TropoForecast] Error updating button indicator:', e);
+        }
+    }
+
+    function applyIndicatorColor(color, label, indexVal) {
+        const btn = document.getElementById('TROPO-BTN');
+        if (!btn) return;
+        
+        // Ensure the button acts as an anchor for the absolute positioned indicator
+        btn.style.position = 'relative';
+        btn.style.overflow = 'hidden'; 
+        
+        // 1. Manage the Color Indicator Bar
+        let indicator = document.getElementById('tropo-btn-indicator');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.id = 'tropo-btn-indicator';
+            indicator.style.cssText = 'position: absolute; bottom: 0; left: 0; width: 100%; height: 5px; background-color: transparent; pointer-events: none; transition: background-color 0.5s ease; z-index: 10;';
+            btn.appendChild(indicator);
+        }
+        
+        if (color === 'rgba(0,0,0,0)' || !color) {
+            indicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+            indicator.title = 'Current Tropo: None/Marginal';
+        } else {
+            indicator.style.backgroundColor = color;
+            indicator.title = `Current Tropo: ${label} (+${indexVal})`;
+        }
+
+        // 2. Safely Update Text Value using a TreeWalker to only target the raw text node 
+        // This ensures compatibility with any themes without breaking HTML structure.
+        let textNodes = [];
+        const walk = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT, null, false);
+        let n;
+        while(n = walk.nextNode()) {
+            textNodes.push(n);
+        }
+        
+        for (let node of textNodes) {
+            if (node.nodeValue.includes('Tropo')) {
+                // Dynamically append the +X value, or return to just 'Tropo' if 0
+                node.nodeValue = indexVal > 0 ? `Tropo +${indexVal}` : 'Tropo';
+                break; // Update only the first occurrence
+            }
+        }
     }
 
     // --- RENDERING ---
@@ -526,7 +658,6 @@
         }
     }
 
-    // Update header coordinates in real-time
     function updateHeaderCoordinates() {
         const qthEl = document.getElementById('tropo-qth');
         if (qthEl) {
@@ -538,7 +669,6 @@
         }
     }
 
-    // Update map marker position
     function updateMapMarker() {
         if (mapInstance && positionMarker && gpsData.lat && gpsData.lon) {
             const lat = parseFloat(gpsData.lat);
@@ -550,7 +680,6 @@
         }
     }
 
-    // Draw own position marker
     function drawPositionMarker(lat, lon) {
         if (positionMarker) {
             mapInstance.removeLayer(positionMarker);
@@ -571,14 +700,12 @@
         positionMarker.bindPopup(`📍 Position<br>${lat_num.toFixed(5)}° / ${lon_num.toFixed(5)}°`);
     }
 
-    // Get last full hour in UTC
     function getLastFullHour() {
         const now = new Date();
         const utcHour = now.getUTCHours();
         return utcHour;
     }
 
-    // Check if hour has changed and reload data
     function checkHourChange() {
         if (!TropoMapActive || !container || container.style.display === 'none') {
             return;
@@ -593,7 +720,6 @@
         }
     }
 
-    // Helper: Calculate Bounds
     function calculateBounds(lat, lon, radiusKm) {
         const latDeg = radiusKm / 111.0;
         const lonDeg = radiusKm / (111.0 * Math.cos(lat * Math.PI / 180));
@@ -605,23 +731,18 @@
         };
     }
 
-    // Helper: Fetch and cache logic
     async function fetchAndCacheTropoData(centerLat, centerLon, radiusKm) {
-        // Calculate bounds based on selected radius
         const bounds = calculateBounds(centerLat, centerLon, radiusKm);
         
-        // Create cache key based on center coordinates and radius + VERSION
         const cacheKey = `tropo_v${CACHE_VERSION}_${Math.round(centerLat * 100)}_${Math.round(centerLon * 100)}_${radiusKm}`;
         const cachedData = localStorage.getItem(cacheKey);
         
         if (cachedData) {
             try {
-                // Use cached data
                 const cached = JSON.parse(cachedData);
                 
-                // Check if cache is still valid (less than 1 hour old)
                 const cacheAge = Date.now() - cached.timestamp;
-                if (cacheAge < 3600000) { // 1 hour
+                if (cacheAge < 3600000) { 
                     console.log('[TropoForecast] Using cached data');
                     return { results: cached.results, bounds };
                 }
@@ -631,14 +752,12 @@
             }
         }
 
-        // Fetch new data
         console.log('[TropoForecast] Fetching fresh data from API');
         
         const apiLats = [];
         const apiLons = [];
         const gSize = CONFIG.apiGridRes;
 
-        // Generate grid points
         for(let y = 0; y < gSize; y++) {
             const lat = bounds.minLat + (y / (gSize-1)) * (bounds.maxLat - bounds.minLat);
             for(let x = 0; x < gSize; x++) {
@@ -655,7 +774,6 @@
         levels.forEach(l => {
             params.push(`temperature_${l}hPa`);
             params.push(`relative_humidity_${l}hPa`);
-            // Wind data for shear calculation
             params.push(`wind_speed_${l}hPa`);
             params.push(`wind_direction_${l}hPa`);
         });
@@ -667,7 +785,6 @@
         const json = await resp.json();
 
         let results = [];
-        // The API returns an array for multiple locations, or a single object for one location
         if(json.hourly) {
             results = [json];
         } else if(Array.isArray(json)) {
@@ -679,7 +796,6 @@
 
         console.log('[TropoForecast] Parsed', results.length, 'result objects');
 
-        // Cache the data with error handling for QuotaExceededError
         try {
             const cachePayload = JSON.stringify({
                 results: results,
@@ -693,12 +809,10 @@
                 if (e.name === 'QuotaExceededError' || e.code === 22) {
                     console.warn('[TropoForecast] Storage quota exceeded. Clearing old cache...');
                     
-                    // Clear all Tropo related items to free up space
                     Object.keys(localStorage)
                         .filter(key => key.startsWith('tropo_'))
                         .forEach(key => localStorage.removeItem(key));
                     
-                    // Try again
                     localStorage.setItem(cacheKey, cachePayload);
                     console.log('[TropoForecast] Data cached after cleanup');
                 } else {
@@ -712,20 +826,17 @@
         return { results, bounds };
     }
 
-    // Startup background fetch
     function initBackgroundCache() {
         const r = parseInt(localStorage.getItem('lastSelectedRadius') || CONFIG.defaultRadius);
         
         let targetLat, targetLon;
 
-        // Use QTH if available
         if(QTH_LAT && QTH_LON) {
              targetLat = parseFloat(QTH_LAT);
              targetLon = parseFloat(QTH_LON);
              console.log(`[TropoForecast] Prefetching data for QTH: ${targetLat}, ${targetLon}`);
              fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[TropoForecast] Background fetch failed:", e));
         } 
-        // Fallback to Geolocation
         else if ("geolocation" in navigator) {
              navigator.geolocation.getCurrentPosition(p => {
                   targetLat = p.coords.latitude;
@@ -739,7 +850,6 @@
     async function loadDataForRadius(radiusKm) {
         if(!mapInstance) return;
 
-        // 1. Update UI state
         localStorage.setItem('lastSelectedRadius', radiusKm);
         lastSelectedRadius = radiusKm;
 
@@ -758,12 +868,10 @@
             statusEl.style.display = 'block';
         }
 
-        // 2. Stop any running animation
         const wasPlaying = isPlaying;
         if (animationFrameId) { clearTimeout(animationFrameId); animationFrameId = null; }
         isPlaying = false; 
 
-        // 3. Determine Center
          let center;
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             center = { lat: parseFloat(gpsData.lat), lng: parseFloat(gpsData.lon) };
@@ -773,26 +881,18 @@
             center = mapInstance.getCenter();
         }
         
-        // Update marker if needed
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             drawPositionMarker(gpsData.lat, gpsData.lon);
         } else if (QTH_LAT && QTH_LON) {
             drawPositionMarker(QTH_LAT, QTH_LON);
         }
         
-        centerPoint = [center.lat, center.lng];
-
         try {
-            // 4. Fetch Data FIRST (keep the old view visible while loading)
             if(statusEl) statusEl.innerHTML = `<span class="spin">⟳</span> Fetching data...`;
             
-            // This waits for the data to be ready...
             const data = await fetchAndCacheTropoData(center.lat, center.lng, radiusKm);
             const results = data.results;
             
-            // 5. NOW update the map view (Instant switch, no animation)
-            
-            // Clear the old overlay explicitly to avoid artifacts
             if(weatherOverlayCanvas) {
                 const ctx = weatherOverlayCanvas.getContext('2d');
                 ctx.clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
@@ -804,11 +904,9 @@
                 [apiBounds.maxLat, apiBounds.maxLon]
             );
 
-            // IMPORTANT: animate: false prevents the "fade/zoom" glitch
             mapInstance.fitBounds(viewBounds, { padding: [0, 0], animate: false });
             mapInstance.invalidateSize();
 
-            // 6. Process Frames
             frames = [];
             const nowHour = getLastFullHour();
             lastHourChecked = nowHour;
@@ -851,8 +949,10 @@
             if(statusEl) statusEl.style.display = 'none';
             
             if(frames.length > 0) {
-                // Synchronously draw the first frame
                 renderFrame(currentFrameIndex);
+
+                // Update the main button text/color since map data is now fresh
+                updateCurrentTropoIndicator();
 
                 if(wasPlaying) {
                     isPlaying = true;
@@ -889,7 +989,6 @@
 
         function dragMouseDown(e) {
             e = e || window.event;
-            // Only drag if left mouse button
             if(e.button !== 0) return;
             
             e.preventDefault();
@@ -907,11 +1006,9 @@
             pos3 = e.clientX;
             pos4 = e.clientY;
             
-            // Calculate new positions
             let newTop = (el.offsetTop - pos2);
             let newLeft = (el.offsetLeft - pos1);
             
-            // Set position
             el.style.top = newTop + "px";
             el.style.left = newLeft + "px";
         }
@@ -920,7 +1017,6 @@
             document.onmouseup = null;
             document.onmousemove = null;
             
-            // Save to localStorage
             localStorage.setItem('tropoTop', el.style.top);
             localStorage.setItem('tropoLeft', el.style.left);
         }
@@ -956,7 +1052,7 @@
                 isolation: isolate;
             }
             #tropo-header {
-                background-color: var(--color-1);
+                background:#0a0a0a; 
                 padding: 8px 15px;
                 border-bottom: 1px solid #444; 
                 font-weight: bold;
@@ -1010,8 +1106,14 @@
                 z-index: 2;
             }
             
+            /* High Contrast Filter for CartoDB BaseMap */
+            /* We make brightness very high and contrast high to force dark grey borders into light colors */
+            .high-contrast-map {
+                filter: brightness(3) contrast(1) !important; 
+            }
+            
             #tropo-content {
-                padding: 12px; 
+                padding: 5px; 
                 background:#0a0a0a; 
                 border-top:1px solid #222; 
                 max-height: 500px; 
@@ -1100,11 +1202,9 @@
         container = document.createElement('div');
         container.id = 'tropo-overlay';
         
-        // Retrieve and validate localStorage positions
         let savedTop = localStorage.getItem('tropoTop') || '20px';
         let savedLeft = localStorage.getItem('tropoLeft') || '20px';
         
-        // Safety check: if position is crazy (off screen), reset it
         if (parseInt(savedTop) < 0 || parseInt(savedTop) > window.innerHeight - 50) savedTop = '20px';
         if (parseInt(savedLeft) < 0 || parseInt(savedLeft) > window.innerWidth - 50) savedLeft = '20px';
         
@@ -1175,6 +1275,7 @@
         for(let i=1; i<PALETTE.length; i++) {
             legendHTML += `
                 <div class="legend-item">
+                    <div class="legend-index" style="font-size: 11px; font-weight: bold; color: #fff; margin-bottom: 2px;">+${i}</div>
                     <div class="legend-color" style="background:${PALETTE[i].color};"></div>
                     <div class="legend-label">${PALETTE[i].label}</div>
                 </div>
@@ -1192,7 +1293,6 @@
         container.appendChild(controls);
         document.body.appendChild(container);
         
-        // Enable dragging
         makeDraggable(container);
 
         mapInstance = L.map('tropo-map-container', { 
@@ -1207,10 +1307,11 @@
             doubleClickZoom: false 
         });
 
-        // CartoDB.DarkMatterNoLabels
+        // Use the high-contrast filter class for the basemap
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 19,
-            subdomains: 'abcd'
+            subdomains: 'abcd',
+            className: 'high-contrast-map'
         }).addTo(mapInstance);
 
         L.CanvasOverlay = L.Layer.extend({
@@ -1261,8 +1362,6 @@
             }
         }, true);
 
-        // Define starting point but do NOT automatically call loadDataForRadius here anymore
-        // It will be called by togglePlugin() so we can wait for it.
         const setStartCenter = (lat, lon) => {
              mapInstance.setView([lat, lon], 7);
         };
@@ -1283,7 +1382,7 @@
 
         document.getElementById('tropo-close').addEventListener('click', () => {
             const btn = document.getElementById('TROPO-BTN');
-            if (btn) btn.click(); // Trigger the standard toggle off function
+            if (btn) btn.click(); 
         });
 
         document.getElementById('tropo-play-btn').addEventListener('click', togglePlay);
@@ -1295,6 +1394,9 @@
             }
             updatePlayButton();
             renderFrame(parseInt(e.target.value));
+            
+            // Sync button indicator with the newly selected timeline hour
+            updateCurrentTropoIndicator();
         });
 
         [200, 300, 400, 500].forEach(km => {
@@ -1313,7 +1415,6 @@
                 
                 const $overlay = $('#tropo-overlay');
                 
-                // Show the container in the DOM with 0 opacity so Leaflet can get the correct dimensions
                 $overlay.css({
                     'display': 'flex',
                     'opacity': 0
@@ -1322,32 +1423,30 @@
                 setTimeout(async () => {
                     if(mapInstance) {
                         mapInstance.invalidateSize();
-                        // WAIT for data to be loaded and the first frame to be drawn onto the canvas
                         await loadDataForRadius(parseInt(lastSelectedRadius));
-                        // Fade EVERYTHING in together smoothly
                         $overlay.animate({ opacity: 1 }, 600);
                     }
                 }, 100);
 
-                // Start hour change checker
                 lastHourChecked = getLastFullHour();
                 if (hourUpdateInterval) clearInterval(hourUpdateInterval);
-                hourUpdateInterval = setInterval(checkHourChange, 60000); // Check every minute
+                hourUpdateInterval = setInterval(checkHourChange, 60000); 
             });
         } else {
             if(btn) btn.classList.remove('active');
             
-            // Fade EVERYTHING out together
             $('#tropo-overlay').animate({ opacity: 0 }, 600, function() {
                 $(this).css('display', 'none');
                 
-                // Clear tropo clouds ONLY AFTER the window is completely invisible
                 if (weatherOverlayCanvas) {
                     const ctx = weatherOverlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
                 }
                 frames = [];
                 currentFrameIndex = 0;
+                
+                // Return button to "live/current hour" value rather than map timeline value
+                updateCurrentTropoIndicator();
             });
             
             isPlaying = false;
@@ -1356,7 +1455,6 @@
                 animationFrameId = null;
             }
 
-            // Stop hour change checker
             if (hourUpdateInterval) {
                 clearInterval(hourUpdateInterval);
                 hourUpdateInterval = null;
@@ -1364,7 +1462,7 @@
         }
     }
 
-    // --- Toolbar Button ---
+    // --- Toolbar Button & Initialization ---
     (function () {
         const btnId = 'TROPO-BTN';
         let found = false;
@@ -1386,6 +1484,11 @@
                         $("<style>").prop("type", "text/css").html(css).appendTo("head");
                         
                         $btn.on('click', togglePlugin);
+
+                        // Trigger the indicator display
+                        updateCurrentTropoIndicator();
+                        // Refresh the Tropo button color regularly (every 15 min)
+                        setInterval(updateCurrentTropoIndicator, 15 * 60 * 1000);
                     }
                 });
                 btnObs.observe(document.body, { childList: true, subtree: true });
