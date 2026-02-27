@@ -1,7 +1,7 @@
 # TropoForecast
 Local and regional tropo forecast for FMDX web server
 
-<img width="1755" height="853" alt="grafik" src="https://github.com/user-attachments/assets/f816a42f-64b6-4750-8e01-459ec80c9758" />
+![TropoForecast](https://github.com/user-attachments/assets/586405e1-68f0-4c88-97f3-87d4f2e6c9f4)
 
 ## Version 1.1
 
