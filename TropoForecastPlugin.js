@@ -1,7 +1,7 @@
 // Plugin configuration, this is used in the administration when plugins are loaded
 var pluginConfig = {
     name: 'Tropo Forecast',
-    version: '1.1',
+    version: '1.1a',
 	author: '',
     frontEndPath: 'TropoForecast/TropoForecast.js'
 }

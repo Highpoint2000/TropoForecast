@@ -1,7 +1,7 @@
 (() => {
     ////////////////////////////////////////////////////////////////
     ///                                                          ///
-    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER        V1.1   ///
+    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER        V1.1a  ///
     ///                                                          ///
     ///  by Highpoint                last update: 2026-02-27     ///
     ///                                                          ///
@@ -16,7 +16,7 @@
     ///////////////////////////////////////////////////////////////
 
     // Plugin metadata
-    const pluginVersion = '1.1';
+    const pluginVersion = '1.1a';
     const CACHE_VERSION = pluginVersion;
     const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
@@ -101,7 +101,7 @@
                 const pluginSettings = document.getElementById('plugin-settings');
                 if (pluginSettings) {
                     const currentText = pluginSettings.textContent.trim();
-                    const newText = `<a href="${urlUpdateLink}" target="_blank">[${pluginName}] Update available: ${pluginVersionCheck} --> ${newVersion}</a><br>`;
+                    const newText = `<br><a href="${urlUpdateLink}" target="_blank">[${pluginName}] Update available: ${pluginVersionCheck} --> ${newVersion}</a><br>`;
 
                     if (currentText === 'No plugin settings are available.') {
                         pluginSettings.innerHTML = newText;
@@ -165,7 +165,7 @@
                     gpsData.alt = alt || null;
                     gpsData.status = 'active';
                                     
-                    // Update header coordinates
+                    // Update header coordinates dynamically
                     updateHeaderCoordinates();
                     
                     // Update map marker continuously
@@ -182,7 +182,11 @@
                         updateCurrentTropoIndicator();
                     }
                 } else {
-                    gpsData.status = 'inactive';
+                    // Fallback to QTH if GPS is lost
+                    if (gpsData.status === 'active') {
+                        gpsData.status = 'inactive';
+                        updateHeaderCoordinates();
+                    }
                 }
             }
         } catch (e) {
@@ -213,9 +217,6 @@
         {color: 'rgba(255,180,220,1.0)', label: 'Max'}
     ];
 
-    const QTH_LAT = localStorage.getItem('qthLatitude');
-    const QTH_LON = localStorage.getItem('qthLongitude');
-
     let TropoMapActive = false;
     let container = null;
     let mapInstance = null;
@@ -230,6 +231,7 @@
     let gridSize = CONFIG.apiGridRes;
     let lastSelectedRadius = localStorage.getItem('lastSelectedRadius') || CONFIG.defaultRadius;
     let hourUpdateInterval = null;
+    let headerUpdateInterval = null; // Background interval to keep header dynamically fresh
     let lastHourChecked = -1;
 
     // Variables for button indicator
@@ -342,13 +344,16 @@
     async function updateCurrentTropoIndicator() {
         let lat, lon;
         
-        // Use GPS or fallback to QTH coordinates
+        const qLat = localStorage.getItem('qthLatitude');
+        const qLon = localStorage.getItem('qthLongitude');
+
+        // Use GPS or fallback to QTH coordinates dynamically
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             lat = parseFloat(gpsData.lat);
             lon = parseFloat(gpsData.lon);
-        } else if (QTH_LAT && QTH_LON) {
-            lat = parseFloat(QTH_LAT);
-            lon = parseFloat(QTH_LON);
+        } else if (qLat && qLon) {
+            lat = parseFloat(qLat);
+            lon = parseFloat(qLon);
         } else {
             return; // No location available yet
         }
@@ -660,12 +665,18 @@
 
     function updateHeaderCoordinates() {
         const qthEl = document.getElementById('tropo-qth');
-        if (qthEl) {
-            if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
-                qthEl.textContent = `${parseFloat(gpsData.lat).toFixed(5)}° / ${parseFloat(gpsData.lon).toFixed(5)}°`;
-            } else if (QTH_LAT && QTH_LON) {
-                qthEl.textContent = `${parseFloat(QTH_LAT).toFixed(5)}° / ${parseFloat(QTH_LON).toFixed(5)}°`;
-            }
+        if (!qthEl) return;
+
+        // Dynamically get from localstorage on each update
+        const qthLat = localStorage.getItem('qthLatitude');
+        const qthLon = localStorage.getItem('qthLongitude');
+
+        if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
+            qthEl.textContent = `${parseFloat(gpsData.lat).toFixed(5)}° / ${parseFloat(gpsData.lon).toFixed(5)}° (GPS)`;
+        } else if (qthLat && qthLon) {
+            qthEl.textContent = `${parseFloat(qthLat).toFixed(5)}° / ${parseFloat(qthLon).toFixed(5)}° (QTH)`;
+        } else {
+            qthEl.textContent = 'No Position';
         }
     }
 
@@ -830,20 +841,24 @@
         const r = parseInt(localStorage.getItem('lastSelectedRadius') || CONFIG.defaultRadius);
         
         let targetLat, targetLon;
+        const qLat = localStorage.getItem('qthLatitude');
+        const qLon = localStorage.getItem('qthLongitude');
 
-        if(QTH_LAT && QTH_LON) {
-             targetLat = parseFloat(QTH_LAT);
-             targetLon = parseFloat(QTH_LON);
-             console.log(`[TropoForecast] Prefetching data for QTH: ${targetLat}, ${targetLon}`);
+        // 1. First check if live GPS data is available
+        if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
+             targetLat = parseFloat(gpsData.lat);
+             targetLon = parseFloat(gpsData.lon);
+             console.log(`[TropoForecast] Prefetching data for GPS: ${targetLat}, ${targetLon}`);
              fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[TropoForecast] Background fetch failed:", e));
         } 
-        else if ("geolocation" in navigator) {
-             navigator.geolocation.getCurrentPosition(p => {
-                  targetLat = p.coords.latitude;
-                  targetLon = p.coords.longitude;
-                  console.log(`[TropoForecast] Prefetching data for Geo: ${targetLat}, ${targetLon}`);
-                  fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[TropoForecast] Background fetch failed:", e));
-             });
+        // 2. Fallback to saved QTH from LocalStorage dynamically
+        else if (qLat && qLon) {
+             targetLat = parseFloat(qLat);
+             targetLon = parseFloat(qLon);
+             console.log(`[TropoForecast] Prefetching data for QTH: ${targetLat}, ${targetLon}`);
+             fetchAndCacheTropoData(targetLat, targetLon, r).catch(e => console.log("[TropoForecast] Background fetch failed:", e));
+        } else {
+             console.log("[TropoForecast] No GPS or QTH data available for prefetching. Skipping.");
         }
     }
 
@@ -873,18 +888,21 @@
         isPlaying = false; 
 
          let center;
+         const qLat = localStorage.getItem('qthLatitude');
+         const qLon = localStorage.getItem('qthLongitude');
+
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             center = { lat: parseFloat(gpsData.lat), lng: parseFloat(gpsData.lon) };
-        } else if (QTH_LAT && QTH_LON) {
-            center = { lat: parseFloat(QTH_LAT), lng: parseFloat(QTH_LON) };
+        } else if (qLat && qLon) {
+            center = { lat: parseFloat(qLat), lng: parseFloat(qLon) };
         } else {
             center = mapInstance.getCenter();
         }
         
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             drawPositionMarker(gpsData.lat, gpsData.lon);
-        } else if (QTH_LAT && QTH_LON) {
-            drawPositionMarker(QTH_LAT, QTH_LON);
+        } else if (qLat && qLon) {
+            drawPositionMarker(qLat, qLon);
         }
         
         try {
@@ -1024,13 +1042,6 @@
 
     function createUI() {
         if(container) return;
-
-        let qthDisplay = '--';
-        if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
-            qthDisplay = `${parseFloat(gpsData.lat).toFixed(5)}° / ${parseFloat(gpsData.lon).toFixed(5)}°`;
-        } else if (QTH_LAT && QTH_LON) {
-            qthDisplay = `${parseFloat(QTH_LAT).toFixed(5)}° / ${parseFloat(QTH_LON).toFixed(5)}°`;
-        }
 
         const style = document.createElement('style');
         style.innerHTML = `
@@ -1225,7 +1236,7 @@
         header.id = 'tropo-header';
         header.innerHTML = `
             <span id="tropo-title">Tropo Forecast</span>
-            <span id="tropo-qth">${qthDisplay}</span>
+            <span id="tropo-qth">--</span>
             <span id="tropo-close" title="Close">&times;</span>
         `;
         container.appendChild(header);
@@ -1293,6 +1304,9 @@
         container.appendChild(controls);
         document.body.appendChild(container);
         
+        // Immediately fetch dynamic coordinates for header
+        updateHeaderCoordinates();
+
         makeDraggable(container);
 
         mapInstance = L.map('tropo-map-container', { 
@@ -1366,17 +1380,19 @@
              mapInstance.setView([lat, lon], 7);
         };
 
+        const qLat = localStorage.getItem('qthLatitude');
+        const qLon = localStorage.getItem('qthLongitude');
+
+        // 1. Use live GPS (if available)
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             setStartCenter(parseFloat(gpsData.lat), parseFloat(gpsData.lon));
-        } else if (QTH_LAT && QTH_LON) {
-            setStartCenter(parseFloat(QTH_LAT), parseFloat(QTH_LON));
-        } else if ("geolocation" in navigator) {
-             navigator.geolocation.getCurrentPosition(p => {
-                 setStartCenter(p.coords.latitude, p.coords.longitude);
-             }, () => {
-                 setStartCenter(51.29, 12.44);
-             });
-        } else {
+        } 
+        // 2. Fallback to QTH LocalStorage
+        else if (qLat && qLon) {
+            setStartCenter(parseFloat(qLat), parseFloat(qLon));
+        } 
+        // 3. Fallback to default coordinates
+        else {
             setStartCenter(51.29, 12.44);
         }
 
@@ -1431,6 +1447,10 @@
                 lastHourChecked = getLastFullHour();
                 if (hourUpdateInterval) clearInterval(hourUpdateInterval);
                 hourUpdateInterval = setInterval(checkHourChange, 60000); 
+
+                // Start dynamic header refresh to catch any LocalStorage/settings changes
+                if (headerUpdateInterval) clearInterval(headerUpdateInterval);
+                headerUpdateInterval = setInterval(updateHeaderCoordinates, 2000);
             });
         } else {
             if(btn) btn.classList.remove('active');
@@ -1458,6 +1478,10 @@
             if (hourUpdateInterval) {
                 clearInterval(hourUpdateInterval);
                 hourUpdateInterval = null;
+            }
+            if (headerUpdateInterval) {
+                clearInterval(headerUpdateInterval);
+                headerUpdateInterval = null;
             }
         }
     }
