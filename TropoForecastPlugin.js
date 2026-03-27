@@ -2,7 +2,7 @@
 var pluginConfig = {
     name: 'Tropo Forecast',
     version: '1.1a',
-	author: '',
+	author: 'Highpoint',
     frontEndPath: 'TropoForecast/TropoForecast.js'
 }
 
