@@ -1,9 +1,9 @@
 (() => {
     ////////////////////////////////////////////////////////////////
     ///                                                          ///
-    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER        V1.1a  ///
+    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER        V1.2   ///
     ///                                                          ///
-    ///  by Highpoint                last update: 2026-02-27     ///
+    ///  by Highpoint                last update: 2026-05-11     ///
     ///                                                          ///
     ///  https://github.com/Highpoint2000/TropoForecast          ///
     ///                                                          ///
@@ -16,7 +16,7 @@
     ///////////////////////////////////////////////////////////////
 
     // Plugin metadata
-    const pluginVersion = '1.1a';
+    const pluginVersion = '1.2';
     const CACHE_VERSION = pluginVersion;
     const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
@@ -196,7 +196,7 @@
 
     // ------------- Configuration -------------------
     const CONFIG = {
-        apiGridRes: 12,
+        apiGridRes: 20,  // ERHÖHT: 20x20 Grid = 400 Messpunkte für konstante Detailtreue!
         renderRes: 1024,
         defaultRadius: 500,
         blurAmount: 'blur(1px)',
@@ -233,6 +233,7 @@
     let hourUpdateInterval = null;
     let headerUpdateInterval = null; // Background interval to keep header dynamically fresh
     let lastHourChecked = -1;
+    let radiusFetchTimeout = null;   // Für API 429 Debouncing
 
     // Variables for button indicator
     let lastIndicatorFetchTime = 0;
@@ -555,8 +556,8 @@
                     const match = colorObj.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]*)\)/);
                     if(match) {
                         data[idx] = parseInt(match[1]);
-                        data[idx + 1] = parseInt(match[2]);
                         data[idx + 2] = parseInt(match[3]);
+                        data[idx + 1] = parseInt(match[2]);
                         data[idx + 3] = match[4] ? Math.round(parseFloat(match[4]) * 255) : 255;
                     }
                 }
@@ -664,19 +665,19 @@
     }
 
     function updateHeaderCoordinates() {
-        const qthEl = document.getElementById('tropo-qth');
-        if (!qthEl) return;
+        const badgeEl = document.getElementById('tropo-validation-badge');
+        if (!badgeEl) return;
 
         // Dynamically get from localstorage on each update
         const qthLat = localStorage.getItem('qthLatitude');
         const qthLon = localStorage.getItem('qthLongitude');
 
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
-            qthEl.textContent = `${parseFloat(gpsData.lat).toFixed(5)}° / ${parseFloat(gpsData.lon).toFixed(5)}° (GPS)`;
+            badgeEl.textContent = `${parseFloat(gpsData.lat).toFixed(5)}° / ${parseFloat(gpsData.lon).toFixed(5)}° (GPS)`;
         } else if (qthLat && qthLon) {
-            qthEl.textContent = `${parseFloat(qthLat).toFixed(5)}° / ${parseFloat(qthLon).toFixed(5)}° (QTH)`;
+            badgeEl.textContent = `${parseFloat(qthLat).toFixed(5)}° / ${parseFloat(qthLon).toFixed(5)}° (QTH)`;
         } else {
-            qthEl.textContent = 'No Position';
+            badgeEl.textContent = 'No Position';
         }
     }
 
@@ -767,7 +768,7 @@
         
         const apiLats = [];
         const apiLons = [];
-        const gSize = CONFIG.apiGridRes;
+        const gSize = CONFIG.apiGridRes; // Nun 20
 
         for(let y = 0; y < gSize; y++) {
             const lat = bounds.minLat + (y / (gSize-1)) * (bounds.maxLat - bounds.minLat);
@@ -778,7 +779,7 @@
             }
         }
 
-        console.log('[TropoForecast] Requesting', apiLats.length, 'grid points');
+        console.log('[TropoForecast] Requesting', apiLats.length, 'grid points in chunks');
         
         const levels = [1000, 975, 950, 925, 900, 875, 850];
         let params = [];
@@ -789,20 +790,39 @@
             params.push(`wind_direction_${l}hPa`);
         });
         
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${apiLats.join(',')}&longitude=${apiLons.join(',')}&hourly=${params.join(',')}&forecast_days=2&models=best_match`;
-
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`API Error: ${resp.status}`);
-        const json = await resp.json();
-
+        // BATCHING LOGIC (Häppchenweise Abfrage um 429 Error bei > 100 Punkten zu verhindern)
         let results = [];
-        if(json.hourly) {
-            results = [json];
-        } else if(Array.isArray(json)) {
-            results = json;
-        } else {
-            console.error('[TropoForecast] Unexpected API response:', json);
-            throw new Error("Invalid API response format");
+        const chunkSize = 100;
+        
+        for (let i = 0; i < apiLats.length; i += chunkSize) {
+            const latsChunk = apiLats.slice(i, i + chunkSize);
+            const lonsChunk = apiLons.slice(i, i + chunkSize);
+            
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${latsChunk.join(',')}&longitude=${lonsChunk.join(',')}&hourly=${params.join(',')}&forecast_days=2&models=best_match`;
+
+            const resp = await fetch(url);
+            
+            if (!resp.ok) {
+                if (resp.status === 429) {
+                    throw new Error("API Limit (429): Bitte kurz warten.");
+                }
+                throw new Error(`API Error: ${resp.status}`);
+            }
+            
+            const json = await resp.json();
+            
+            if(Array.isArray(json)) {
+                results.push(...json);
+            } else if (json.hourly) {
+                results.push(json); 
+            } else {
+                throw new Error("Invalid API response format");
+            }
+
+            // Kleine Pause von 200ms zwischen den Anfragen, um das API Limit nicht zu reizen
+            if (i + chunkSize < apiLats.length) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
         }
 
         console.log('[TropoForecast] Parsed', results.length, 'result objects');
@@ -879,7 +899,7 @@
 
         const statusEl = document.getElementById('tropo-status-overlay');
         if(statusEl) {
-            statusEl.innerHTML = `<span class="spin">⟳</span> Loading data...`;
+            statusEl.innerHTML = `<span class="spin">⟳</span> Warten...`;
             statusEl.style.display = 'block';
         }
 
@@ -905,93 +925,98 @@
             drawPositionMarker(qLat, qLon);
         }
         
-        try {
-            if(statusEl) statusEl.innerHTML = `<span class="spin">⟳</span> Fetching data...`;
-            
-            const data = await fetchAndCacheTropoData(center.lat, center.lng, radiusKm);
-            const results = data.results;
-            
-            if(weatherOverlayCanvas) {
-                const ctx = weatherOverlayCanvas.getContext('2d');
-                ctx.clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
-            }
-
-            apiBounds = data.bounds;
-            const viewBounds = L.latLngBounds(
-                [apiBounds.minLat, apiBounds.minLon],
-                [apiBounds.maxLat, apiBounds.maxLon]
-            );
-
-            mapInstance.fitBounds(viewBounds, { padding: [0, 0], animate: false });
-            mapInstance.invalidateSize();
-
-            frames = [];
-            const nowHour = getLastFullHour();
-            lastHourChecked = nowHour;
-            const maxLen = results[0] && results[0].hourly && results[0].hourly.time ? results[0].hourly.time.length : 0;
-
-            console.log('[TropoForecast] Processing frames starting from hour index:', nowHour);
-
-            for(let h=0; h<24; h++) {
-                const hourIdx = nowHour + h;
-                if(hourIdx >= maxLen) break;
+        // DEBOUNCING: Schützt vor API Spam
+        if (radiusFetchTimeout) clearTimeout(radiusFetchTimeout);
+        
+        radiusFetchTimeout = setTimeout(async () => {
+            try {
+                if(statusEl) statusEl.innerHTML = `<span class="spin">⟳</span> Fetching data (High-Res)...`;
                 
-                const timeStr = results[0].hourly.time[hourIdx];
-                const timeDate = new Date(timeStr + 'Z');
+                const data = await fetchAndCacheTropoData(center.lat, center.lng, radiusKm);
+                const results = data.results;
                 
-                const visValues = new Float32Array(results.length);
+                if(weatherOverlayCanvas) {
+                    const ctx = weatherOverlayCanvas.getContext('2d');
+                    ctx.clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
+                }
+
+                apiBounds = data.bounds;
+                const viewBounds = L.latLngBounds(
+                    [apiBounds.minLat, apiBounds.minLon],
+                    [apiBounds.maxLat, apiBounds.maxLon]
+                );
+
+                mapInstance.fitBounds(viewBounds, { padding: [0, 0], animate: false });
+                mapInstance.invalidateSize();
+
+                frames = [];
+                const nowHour = getLastFullHour();
+                lastHourChecked = nowHour;
+                const maxLen = results[0] && results[0].hourly && results[0].hourly.time ? results[0].hourly.time.length : 0;
+
+                console.log('[TropoForecast] Processing frames starting from hour index:', nowHour);
+
+                for(let h=0; h<24; h++) {
+                    const hourIdx = nowHour + h;
+                    if(hourIdx >= maxLen) break;
+                    
+                    const timeStr = results[0].hourly.time[hourIdx];
+                    const timeDate = new Date(timeStr + 'Z');
+                    
+                    const visValues = new Float32Array(results.length);
+                    
+                    for(let i = 0; i < results.length; i++) {
+                        if (results[i] && results[i].hourly) {
+                            const index = calculateTropoIndexPrecise(results[i].hourly, hourIdx);
+                            visValues[i] = index;
+                        }
+                    }
+                    
+                    frames.push({
+                        time: timeDate,
+                        visValues: visValues,
+                        renderedImage: null
+                    });
+                }
+
+                console.log('[TropoForecast] Created', frames.length, 'frames total');
+
+                const slider = document.getElementById('tropo-timeline');
+                if(slider && frames.length > 0) {
+                    slider.max = frames.length - 1;
+                    if (currentFrameIndex >= frames.length) currentFrameIndex = 0;
+                    slider.value = currentFrameIndex;
+                }
                 
-                for(let i = 0; i < results.length; i++) {
-                    if (results[i] && results[i].hourly) {
-                        const index = calculateTropoIndexPrecise(results[i].hourly, hourIdx);
-                        visValues[i] = index;
+                if(statusEl) statusEl.style.display = 'none';
+                
+                if(frames.length > 0) {
+                    renderFrame(currentFrameIndex);
+
+                    // Update the main button text/color since map data is now fresh
+                    updateCurrentTropoIndicator();
+
+                    if(wasPlaying) {
+                        isPlaying = true;
+                        animationLoop();
+                    } else {
+                        updatePlayButton();
+                    }
+                } else {
+                    if(statusEl) {
+                        statusEl.innerText = "No data!";
+                        statusEl.style.display = 'block';
                     }
                 }
-                
-                frames.push({
-                    time: timeDate,
-                    visValues: visValues,
-                    renderedImage: null
-                });
-            }
 
-            console.log('[TropoForecast] Created', frames.length, 'frames total');
-
-            const slider = document.getElementById('tropo-timeline');
-            if(slider && frames.length > 0) {
-                slider.max = frames.length - 1;
-                if (currentFrameIndex >= frames.length) currentFrameIndex = 0;
-                slider.value = currentFrameIndex;
-            }
-            
-            if(statusEl) statusEl.style.display = 'none';
-            
-            if(frames.length > 0) {
-                renderFrame(currentFrameIndex);
-
-                // Update the main button text/color since map data is now fresh
-                updateCurrentTropoIndicator();
-
-                if(wasPlaying) {
-                    isPlaying = true;
-                    animationLoop();
-                } else {
-                    updatePlayButton();
-                }
-            } else {
+            } catch(e) {
+                console.error('[TropoForecast] Error:', e);
                 if(statusEl) {
-                    statusEl.innerText = "No data!";
-                    statusEl.style.display = 'block';
+                    statusEl.innerText = '⚠️ ' + e.message;
+                    setTimeout(() => { statusEl.style.display='none'; }, 5000);
                 }
             }
-
-        } catch(e) {
-            console.error('[TropoForecast] Error:', e);
-            if(statusEl) {
-                statusEl.innerText = '⚠️ Error: ' + e.message;
-                setTimeout(() => { statusEl.style.display='none'; }, 5000);
-            }
-        }
+        }, 600); // 600ms Verzögerung vor dem Request
     }
 
     // --- Drag & Drop Functionality ---
@@ -1079,17 +1104,6 @@
             #tropo-title {
                 color: white;
                 flex: 1;
-            }
-            #tropo-qth {
-                position: absolute;
-                left: 50%;
-                transform: translateX(-50%) translateY(10%);
-                font-size: 12px;
-                color: var(--color-4);
-                white-space: nowrap;
-                width: auto;
-                max-width: 140px;
-                pointer-events: none;
             }
             #tropo-close {
                 cursor: pointer; 
@@ -1205,7 +1219,7 @@
                 text-align: center;
                 padding-top: 8px;
                 border-top: 1px solid #333;
-                cursor: help;
+                cursor: default;
             }
         `;
         document.head.appendChild(style);
@@ -1235,8 +1249,7 @@
         const header = document.createElement('div');
         header.id = 'tropo-header';
         header.innerHTML = `
-            <span id="tropo-title">Tropo Forecast</span>
-            <span id="tropo-qth">--</span>
+            <span id="tropo-title">Tropo Forecast by Highpoint</span>
             <span id="tropo-close" title="Close">&times;</span>
         `;
         container.appendChild(header);
@@ -1297,8 +1310,8 @@
 
         const validationBadge = document.createElement('div');
         validationBadge.id = 'tropo-validation-badge';
-        validationBadge.title = 'ITU-R P.453 validated calculation';
-        validationBadge.innerHTML = '✓ Validated | 12×12 Grid';
+        validationBadge.title = 'Current Position';
+        validationBadge.innerHTML = '--';
         controls.appendChild(validationBadge);
 
         container.appendChild(controls);

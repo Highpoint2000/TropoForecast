@@ -3,9 +3,11 @@ Local and regional tropo forecast for FMDX web server
 
 ![TropoForecast](https://github.com/user-attachments/assets/586405e1-68f0-4c88-97f3-87d4f2e6c9f4)
 
-## Version 1.1a
+## Version 1.2
 
-- Location queries are now performed using the stored formats; queries via the browser are now only a fallback option
+- Grid resolution increased to 20x20, enabling more precise measurements
+- Fixed API Error 429
+- Minor design adjustments
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
@@ -28,6 +30,11 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 1.1a
+
+- Location queries are now performed using the stored formats; queries via the browser are now only a fallback option
+
 
 ### Version 1.1
 
