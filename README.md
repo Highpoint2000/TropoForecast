@@ -7,8 +7,8 @@ Local and regional tropo forecast for FMDX web server
 
 ## Version 1.2
 
-- Grid resolution increased to 20x20, enabling more precise measurements
-- Fixed API Error 429
+- API error 429 was fixed by querying the Open Meteo API once
+- 100 km zoom level added
 - Minor design adjustments
 
 ## Important note
