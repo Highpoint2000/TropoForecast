@@ -12,7 +12,7 @@ Local and regional tropo forecast for FMDX web server
 - Simplified Loading Logic: Removed the complex, two-phase loading process. The system now performs a single, stable data request.  
 – Minor changes to the UI & styling
 
-Thanks to AmateurAudioDude for modifying and adapting the code for the server variant!
+### Thanks to AmateurAudioDude for modifying and adapting the code for the server variant!
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
