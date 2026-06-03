@@ -1,28 +1,31 @@
+    /////////////////////////////////////////////////////////////////////
+    ///                                                               ///
+    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0  ///
+    ///                                                               ///
+    ///  by Highpoint                        last update: 2026-06-03  ///
+    ///                                                               ///
+	///  Revised by AmateurAudioDude                                  ///
+    ///                                                               ///
+    ///  https://github.com/Highpoint2000/TropoForecast               ///
+    ///                                                               ///
+    /////////////////////////////////////////////////////////////////////
+
 (() => {
 
-    ////////////////////////////////////////////////////////////////
-    ///                                                          ///
-    ///  TROPO FORECAST PLUGIN FOR FM-DX-WEBSERVER        V1.2   ///
-    ///                                                          ///
-    ///  by Highpoint                last update: 2026-05-13     ///
-    ///                                                          ///
-    ///  https://github.com/Highpoint2000/TropoForecast          ///
-    ///                                                          ///
-    ////////////////////////////////////////////////////////////////
 
     // ------------- Configuration ----------------
     const pluginSetupOnlyNotify = false;
-    const CHECK_FOR_UPDATES = true;
+    const CHECK_FOR_UPDATES = false;
 
     // Plugin metadata
-    const pluginVersion = '1.2';
+    const pluginVersion = '2.0';
     const CACHE_VERSION = pluginVersion;
     const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
     const pluginUpdateUrl = "https://raw.githubusercontent.com/Highpoint2000/TropoForecast/main/TropoForecast/TropoForecast.js";
     let isAuth = false;
 
-    // WebSocket endpoint for GPS data
+    // WebSocket endpoint
     const url = new URL(window.location.href);
     const host = url.hostname;
     const path = url.pathname.replace(/setup/g, '');
@@ -30,6 +33,46 @@
     const proto = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const WS_URL = `${proto}//${host}:${port}${path}data_plugins`;
     let ws = null;
+
+    // WS request/response infrastructure for server proxy calls
+    let wsReqCounter = 0;
+    const pendingWsRequests = new Map();
+    const WS_REQUEST_TIMEOUT_MS = 35000;
+
+    function wsRequest(type, payload) {
+        return new Promise((resolve, reject) => {
+            function doSend() {
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    reject(new Error('WebSocket not open'));
+                    return;
+                }
+                const requestId = `tropo_${++wsReqCounter}_${Date.now()}`;
+                const timeoutId = setTimeout(() => {
+                    if (pendingWsRequests.has(requestId)) {
+                        pendingWsRequests.delete(requestId);
+                        reject(new Error('WS request timeout'));
+                    }
+                }, WS_REQUEST_TIMEOUT_MS);
+                pendingWsRequests.set(requestId, { resolve, reject, timeoutId });
+                try {
+                    ws.send(JSON.stringify({ type, requestId, ...payload }));
+                } catch (e) {
+                    clearTimeout(timeoutId);
+                    pendingWsRequests.delete(requestId);
+                    reject(e);
+                }
+            }
+
+            if (ws && ws.readyState === WebSocket.CONNECTING) {
+                // Socket is mid-handshake, wait up to 4s for it to open
+                const connectTimeout = setTimeout(() => reject(new Error('WS connect timeout')), 4000);
+                ws.addEventListener('open',  () => { clearTimeout(connectTimeout); doSend(); }, { once: true });
+                ws.addEventListener('close', () => { clearTimeout(connectTimeout); reject(new Error('WebSocket closed during connect')); }, { once: true });
+            } else {
+                doSend();
+            }
+        });
+    }
 
     // GPS data storage
     let gpsData = {
@@ -115,7 +158,7 @@
         if (!ws || ws.readyState === WebSocket.CLOSED) {
             try {
                 ws = new WebSocket(WS_URL);
-                ws.addEventListener('open', () => console.log('[TropoForecast] WebSocket connected'));
+                ws.addEventListener('open', () => { console.log('[TropoForecast] WebSocket connected'); updateCurrentTropoIndicator(); });
                 ws.addEventListener('message', handleMessage);
                 ws.addEventListener('error', e => console.error('[TropoForecast] WebSocket error'));
                 ws.addEventListener('close', () => setTimeout(setupWebSocket, 5000));
@@ -126,6 +169,19 @@
     function handleMessage(evt) {
         try {
             const msg = JSON.parse(evt.data);
+
+            // Handle server proxy responses
+            if (msg.type === 'Plugin-Tropo-Grid-Response' || msg.type === 'Plugin-Tropo-Point-Response') {
+                const entry = pendingWsRequests.get(msg.requestId);
+                if (entry) {
+                    clearTimeout(entry.timeoutId);
+                    pendingWsRequests.delete(msg.requestId);
+                    if (msg.ok) entry.resolve(msg);
+                    else entry.reject(new Error(msg.error || 'request failed'));
+                }
+                return;
+            }
+
             if (msg.type === 'GPS' && msg.value) {
                 const { status, lat, lon, alt } = msg.value;
                 if (status === 'active' && lat && lon) {
@@ -165,11 +221,11 @@
     // ------------- Core Configuration -------------------
     const CONFIG = {
         renderRes:       1024,
-        masterRadius:    500,   // The one and only radius that is actually downloaded
+        masterRadius:    500,
         defaultRadius:   500,
         blurAmount:      'blur(1.2px)',
         opacity:         0.80,
-        cacheValidityMs: 3600000 // 1 hour
+        cacheValidityMs: 3600000 // 1 hour client-side cache
     };
 
     const PALETTE = [
@@ -203,11 +259,12 @@
     let lastHourChecked      = -1;
 
     let isFetchingData       = false;
-    let isApiBusy            = false;
 
     let lastIndicatorFetchTime = 0;
     let lastIndicatorLat     = null;
     let lastIndicatorLon     = null;
+    let locationName         = null;
+    let forecastHours        = null;
     let masterFetchStatus    = 'pending';
     let isPrefetching        = false;
 
@@ -241,22 +298,14 @@
 
         const masterBtn = document.getElementById('btn-500');
         if (masterBtn) {
-            if (state === 'pending' || state === 'loading_current') {
+            if (state === 'pending' || state === 'loading') {
                 masterBtn.disabled  = true;
                 masterBtn.innerHTML = `500km <span class="spin" style="font-size:10px">⟳</span>`;
-                masterBtn.title     = "Downloading 500km master data...";
-            } else if (state === 'ready_current') {
-                masterBtn.disabled  = false;
-                masterBtn.innerHTML = `500km <span style="font-size:9px;color:#aaa;font-weight:normal">(1h)</span>`;
-                masterBtn.title     = "Display 500km (Current Hour Only)";
-            } else if (state === 'loading_full') {
-                masterBtn.disabled  = false;
-                masterBtn.innerHTML = `500km <span class="spin" style="font-size:10px;color:#aaa">⟳</span>`;
-                masterBtn.title     = "Display 500km (Downloading 48h forecast...)";
+                masterBtn.title     = "Downloading 500km data...";
             } else if (state === 'ready') {
                 masterBtn.disabled  = false;
                 masterBtn.innerHTML = `500km`;
-                masterBtn.title     = "Display 500km forecast (48h)";
+                masterBtn.title     = `Display 500km forecast (${forecastHours ? forecastHours + 'h' : '...'})` ;
             } else if (state === 'error') {
                 masterBtn.disabled  = true;
                 masterBtn.innerHTML = `500km ⚠️`;
@@ -268,30 +317,17 @@
             }
         }
 
-// Sub-radius buttons: always reset label text (no color-4 guard) so spinners never stick
-const subReady = (state === 'ready_current' || state === 'loading_full' || state === 'ready');
-  [100, 200, 300, 400].forEach(r => {
-    const btn = document.getElementById(`btn-${r}`);
-    if (!btn) return;
-    btn.disabled  = !subReady;
-    btn.innerHTML = `${r}km`;
-
-    // While the background is still downloading the full 48h forecast,
-    // keep whichever indicator is currently on the active button:
-    //   ⏳  during the post-fetch cooldown second
-    //   ⟳  the rest of the time
-    if (state === 'loading_full' && parseInt(lastSelectedRadius) === r) {
-        const hasHourglass = btn.innerHTML.includes('⏳');
-        btn.innerHTML = hasHourglass
-            ? `${r}km ⏳`
-            : `${r}km <span class="spin" style="font-size:10px;color:#aaa">⟳</span>`;
+        const subReady = (state === 'ready');
+        [100, 200, 300, 400].forEach(r => {
+            const btn = document.getElementById(`btn-${r}`);
+            if (!btn) return;
+            btn.disabled  = !subReady;
+            btn.innerHTML = `${r}km`;
+            btn.title = subReady
+                ? `Zoom to ${r}km (using 500km master data)`
+                : (state === 'error' ? "API Limit Reached." : "Waiting for 500km master data...");
+        });
     }
-
-    btn.title = subReady
-        ? `Zoom to ${r}km (uses 500km master data – no extra API calls)`
-        : (state === 'error' ? "API Limit Reached." : "Waiting for 500km master data...");
-  });
-}
 
     function loadLeaflet(callback) {
         if (window.L) { callback(); return; }
@@ -404,27 +440,36 @@ const subReady = (state === 'ready_current' || state === 'loading_full' || state
             return;
         }
 
-        // Cache path: look up the 500km master cache
+        // Cache path: look up the 500km master cache (stores raw results)
         const cacheKey      = `tropo_v${CACHE_VERSION}_${Math.round(lat * 100)}_${Math.round(lon * 100)}_500`;
         const cachedDataStr = localStorage.getItem(cacheKey);
 
         if (cachedDataStr) {
             try {
                 const cached = JSON.parse(cachedDataStr);
-                const bounds = calculateBounds(lat, lon, 500);
-                if (cached.frames && cached.frames.length > 0) {
-                    const currentIso  = new Date().toISOString().slice(0, 13) + ':00';
-                    const targetFrame = cached.frames.find(f => f.time === currentIso) || cached.frames[0];
-                    const val         = interpolateGridValue(lat, lon, targetFrame.visValues, bounds, getGridSize());
-                    const idx         = val > 0.5 ? Math.round(val) : 0;
-                    const cIdx        = Math.max(0, Math.min(idx, 10));
-                    applyIndicatorColor(PALETTE[cIdx].color, PALETTE[cIdx].label, idx);
+                if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs && cached.results && cached.results.length > 0) {
+                    const bounds    = calculateBounds(lat, lon, 500);
+                    const timeArray = cached.results[0].hourly.time;
+                    const nowIso    = new Date().toISOString().slice(0, 13) + ':00';
+                    let idx         = timeArray.findIndex(t => t === nowIso);
+                    if (idx < 0) idx = 0;
+
+                    const visValues = new Float32Array(cached.results.length);
+                    for (let i = 0; i < cached.results.length; i++) {
+                        if (cached.results[i] && cached.results[i].hourly) {
+                            visValues[i] = calculateTropoIndexPrecise(cached.results[i].hourly, idx);
+                        }
+                    }
+                    const val  = interpolateGridValue(lat, lon, visValues, bounds, getGridSize());
+                    const cIdx2 = val > 0.5 ? Math.round(val) : 0;
+                    const cIdx = Math.max(0, Math.min(cIdx2, 10));
+                    applyIndicatorColor(PALETTE[cIdx].color, PALETTE[cIdx].label, cIdx2);
                     return;
                 }
             } catch (e) { }
         }
 
-        // Fallback: single-point fetch (1 API call, max once per 15 min per location)
+        // Fallback: single-point WS request (max once per 15 min per location)
         const now        = Date.now();
         const locChanged = lastIndicatorLat === null
             || Math.abs(lastIndicatorLat - lat) > 0.05
@@ -436,22 +481,11 @@ const subReady = (state === 'ready_current' || state === 'loading_full' || state
         lastIndicatorLon       = lon;
 
         try {
-            const levels = [1000, 975, 950, 925, 900, 875, 850];
-            const params = [];
-            levels.forEach(l => {
-                params.push(`temperature_${l}hPa`);
-                params.push(`relative_humidity_${l}hPa`);
-                params.push(`wind_speed_${l}hPa`);
-                params.push(`wind_direction_${l}hPa`);
-            });
-
-            const fetchUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${params.join(',')}&forecast_hours=1&models=best_match`;
-            const resp     = await fetch(fetchUrl);
-            if (!resp.ok) return;
-            const json = await resp.json();
-
-            if (json && json.hourly && json.hourly.time) {
-                const indexVal = calculateTropoIndexPrecise(json.hourly, 0);
+            const resp = await wsRequest('Plugin-Tropo-Point-Request', { lat, lon });
+            const hourly = resp.hourly;
+            // Server returns forecast_hours=1, so index 0 is the current hour
+            if (hourly && hourly.time) {
+                const indexVal = calculateTropoIndexPrecise(hourly, 0);
                 const idx      = indexVal > 0.5 ? Math.round(indexVal) : 0;
                 const cIdx     = Math.max(0, Math.min(idx, 10));
                 applyIndicatorColor(PALETTE[cIdx].color, PALETTE[cIdx].label, idx);
@@ -573,13 +607,8 @@ const subReady = (state === 'ready_current' || state === 'loading_full' || state
             clockEl.innerHTML = `<span title="UTC Time">${hh}:${mm} UTC</span>`;
         }
         if (offsetEl) {
-            if (frames.length === 1) {
-                offsetEl.innerText   = `(+0h) - Loading 48h...`;
-                offsetEl.style.color = '#aaa';
-            } else {
-                offsetEl.innerText   = `(+${index}h)`;
-                offsetEl.style.color = 'var(--color-4)';
-            }
+            offsetEl.innerText   = `(+${index}h)`;
+            offsetEl.style.color = 'var(--color-4)';
         }
         if (timelineEl) timelineEl.value = index;
 
@@ -655,12 +684,23 @@ const subReady = (state === 'ready_current' || state === 'loading_full' || state
     function updateHeaderCoordinates() {
         const badgeEl = document.getElementById('tropo-validation-badge');
         if (!badgeEl) return;
+        
         const qthLat = localStorage.getItem('qthLatitude');
         const qthLon = localStorage.getItem('qthLongitude');
+        
+        // 1. Highest priority: GPS coordinates
         if (gpsData.status === 'active' && gpsData.lat && gpsData.lon) {
             badgeEl.textContent = `${parseFloat(gpsData.lat).toFixed(5)}° / ${parseFloat(gpsData.lon).toFixed(5)}° (GPS)`;
+            
+        // 2. Second priority: QTH coordinates
         } else if (qthLat && qthLon) {
             badgeEl.textContent = `${parseFloat(qthLat).toFixed(5)}° / ${parseFloat(qthLon).toFixed(5)}° (QTH)`;
+            
+        // 3. Third priority: Location name (only if coordinates are missing)
+        } else if (locationName) {
+            badgeEl.textContent = `${locationName} (QTH)`;
+            
+        // 4. If absolutely nothing is available
         } else {
             badgeEl.textContent = 'No Position';
         }
@@ -684,118 +724,31 @@ const subReady = (state === 'ready_current' || state === 'loading_full' || state
         positionMarker.bindPopup(`📍 Position<br>${lt.toFixed(5)}° / ${ln.toFixed(5)}°`);
     }
 
-// --- API FETCHING ---
-async function fetchAndCacheTropoData(centerLat, centerLon, fetchMode = 'full') {
+    // --- API FETCHING (via server proxy) ---
+    async function fetchAndCacheTropoData(centerLat, centerLon) {
+        const radiusKm = CONFIG.masterRadius;
+        const bounds   = calculateBounds(centerLat, centerLon, radiusKm);
+        const cacheKey = `tropo_v${CACHE_VERSION}_${Math.round(centerLat * 100)}_${Math.round(centerLon * 100)}_500`;
 
-    // ── FAST PATH: return cache immediately, no lock needed ──────────────
-    const radiusKm  = CONFIG.masterRadius;
-    const bounds    = calculateBounds(centerLat, centerLon, radiusKm);
-    const cacheKey  = `tropo_v${CACHE_VERSION}_${Math.round(centerLat * 100)}_${Math.round(centerLon * 100)}_500`;
-    const cachedRaw = localStorage.getItem(cacheKey);
-    if (cachedRaw) {
-        try {
-            const cached   = JSON.parse(cachedRaw);
-            const fresh    = Date.now() - cached.timestamp < CONFIG.cacheValidityMs;
-            const adequate = fetchMode === 'current' || cached.isFull;
-            if (fresh && adequate) {
-                return { frames: cached.frames, bounds, fromCache: true };
-            }
-        } catch (e) { }
-    }
-    // ─────────────────────────────────────────────────────────────────────
-
-    while (isApiBusy) {
-        await new Promise(r => setTimeout(r, 500));
-    }
-    isApiBusy = true;
-
-    try {
-        // re-check cache now that we hold the lock (another caller may have
-        // populated it while we were waiting)
-        const cachedRaw2 = localStorage.getItem(cacheKey);
-        if (cachedRaw2) {
+        const cachedRaw = localStorage.getItem(cacheKey);
+        if (cachedRaw) {
             try {
-                const cached   = JSON.parse(cachedRaw2);
-                const fresh    = Date.now() - cached.timestamp < CONFIG.cacheValidityMs;
-                const adequate = fetchMode === 'current' || cached.isFull;
-                if (fresh && adequate) {
-                    return { frames: cached.frames, bounds, fromCache: true };
+                const cached = JSON.parse(cachedRaw);
+                if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs && cached.results && cached.results.length > 0) {
+                    if (cached.locationName) locationName = cached.locationName;
+                    if (cached.forecastHours) forecastHours = cached.forecastHours;
+                    return { results: cached.results, bounds, fromCache: true };
                 }
             } catch (e) { }
         }
 
-        // Build 13×13 = 169 coordinate list
-        const gridSize = getGridSize();
-        const apiLats  = [];
-        const apiLons  = [];
-        for (let y = 0; y < gridSize; y++) {
-            const lat = bounds.minLat + (y / (gridSize - 1)) * (bounds.maxLat - bounds.minLat);
-            for (let x = 0; x < gridSize; x++) {
-                const lon = bounds.minLon + (x / (gridSize - 1)) * (bounds.maxLon - bounds.minLon);
-                apiLats.push(lat.toFixed(2));
-                apiLons.push(lon.toFixed(2));
-            }
-        }
+        const resp    = await wsRequest('Plugin-Tropo-Grid-Request', { lat: centerLat, lon: centerLon, radius: radiusKm });
+        const results = Array.isArray(resp.results) ? resp.results : [];
+        if (!results.length) throw new Error('Empty grid response from server');
+        if (resp.locationName) locationName = resp.locationName;
+        if (resp.forecastHours) forecastHours = resp.forecastHours;
 
-        const levels = [1000, 975, 950, 925, 900, 875, 850];
-        const params  = [];
-        levels.forEach(l => {
-            params.push(`temperature_${l}hPa`);
-            params.push(`relative_humidity_${l}hPa`);
-            params.push(`wind_speed_${l}hPa`);
-            params.push(`wind_direction_${l}hPa`);
-        });
-
-        const chunkSize = 25;
-        const timeParam = fetchMode === 'current' ? 'forecast_hours=6' : 'forecast_days=2';
-        const results   = [];
-
-        for (let i = 0; i < apiLats.length; i += chunkSize) {
-            const lats     = apiLats.slice(i, i + chunkSize);
-            const lons     = apiLons.slice(i, i + chunkSize);
-            const fetchUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&hourly=${params.join(',')}&${timeParam}&models=best_match`;
-
-            const resp = await fetch(fetchUrl);
-            if (!resp.ok) {
-                if (resp.status === 429) throw new Error("API Limit (429): Please wait.");
-                throw new Error(`API Error: ${resp.status}`);
-            }
-            const json = await resp.json();
-            if (Array.isArray(json)) results.push(...json);
-            else if (json.hourly)    results.push(json);
-
-            if (i + chunkSize < apiLats.length) {
-                await new Promise(resolve => setTimeout(resolve, 3000));
-            }
-        }
-
-        const framesData = [];
-        if (results.length > 0 && results[0].hourly && results[0].hourly.time) {
-            const utcNow     = new Date();
-            const currentIso = utcNow.toISOString().slice(0, 13) + ':00';
-            let startIdx     = results[0].hourly.time.findIndex(t => t === currentIso);
-            if (startIdx === -1) startIdx = utcNow.getUTCHours();
-
-            const maxFrames = fetchMode === 'current' ? 1 : 48;
-            const maxLen    = results[0].hourly.time.length;
-
-            for (let h = 0; h < maxFrames; h++) {
-                const hourIdx = startIdx + h;
-                if (hourIdx >= maxLen) break;
-
-                const visValues = results.map(r =>
-                    (r && r.hourly) ? calculateTropoIndexPrecise(r.hourly, hourIdx) : 0
-                );
-                framesData.push({ time: results[0].hourly.time[hourIdx], visValues });
-            }
-        }
-
-        const cachePayload = JSON.stringify({
-            frames:    framesData,
-            bounds,
-            isFull:    fetchMode === 'full',
-            timestamp: Date.now()
-        });
+        const cachePayload = JSON.stringify({ results, locationName, forecastHours, timestamp: Date.now() });
         try {
             localStorage.setItem(cacheKey, cachePayload);
         } catch (e) {
@@ -807,30 +760,23 @@ async function fetchAndCacheTropoData(centerLat, centerLon, fetchMode = 'full') 
             }
         }
 
-        return { frames: framesData, bounds, fromCache: false };
-
-    } finally {
-        isApiBusy = false;
+        return { results, bounds, fromCache: false };
     }
-}
 
-    async function fetchWithRetry(lat, lon, mode) {
+    async function fetchWithRetry(lat, lon) {
         let attempt     = 0;
         const maxAttempts = 3;
 
         while (attempt < maxAttempts) {
-            const state = attempt === 0
-                ? (mode === 'current' ? 'loading_current' : 'loading_full')
-                : 'retrying';
-            updateAllButtons(state);
+            updateAllButtons(attempt === 0 ? 'loading' : 'retrying');
 
             try {
-                await fetchAndCacheTropoData(lat, lon, mode);
-                updateAllButtons(mode === 'current' ? 'ready_current' : 'ready');
+                await fetchAndCacheTropoData(lat, lon);
+                updateAllButtons('ready');
                 return true;
             } catch (e) {
                 attempt++;
-                console.error(`[TropoForecast] Fetch failed [${mode}] (attempt ${attempt}/${maxAttempts}):`, e);
+                console.error(`[TropoForecast] Fetch failed (attempt ${attempt}/${maxAttempts}):`, e);
                 if (attempt < maxAttempts) {
                     await new Promise(res => setTimeout(res, 20000));
                 } else {
@@ -843,7 +789,6 @@ async function fetchAndCacheTropoData(centerLat, centerLon, fetchMode = 'full') 
     }
 
     // --- BACKGROUND WORKER ---
-    // Downloads ONLY the 500km master canvas; all sub-radius views are derived from it.
     async function startBackgroundWorker() {
         if (isPrefetching) return;
         isPrefetching = true;
@@ -873,184 +818,185 @@ async function fetchAndCacheTropoData(centerLat, centerLon, fetchMode = 'full') 
 
             const cacheKey      = `tropo_v${CACHE_VERSION}_${Math.round(lat * 100)}_${Math.round(lon * 100)}_500`;
             const cachedDataStr = localStorage.getItem(cacheKey);
-            let needsCurrent    = true;
-            let needsFull       = true;
+            let needsFetch      = true;
 
             if (cachedDataStr) {
                 try {
                     const cached = JSON.parse(cachedDataStr);
                     if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs) {
-                        needsCurrent      = false;
-                        needsFull         = !cached.isFull;
-                        masterFetchStatus = cached.isFull ? 'ready' : 'ready_current';
-                        updateAllButtons(masterFetchStatus);
+                        needsFetch        = false;
+                        masterFetchStatus = 'ready';
+                        updateAllButtons('ready');
                     }
                 } catch (e) { }
             }
 
-            let failed = false;
-
-            // Phase 1: fast single-hour snapshot so buttons unlock quickly
-            if (needsCurrent) {
-                const ok = await fetchWithRetry(lat, lon, 'current');
+            if (needsFetch) {
+                const ok = await fetchWithRetry(lat, lon);
                 if (!ok) {
-                    failed = true;
-                } else if (TropoMapActive && container && container.style.display !== 'none' && !isFetchingData) {
+                    await new Promise(resolve => setTimeout(resolve, 15 * 60 * 1000));
+                    continue;
+                }
+                updateCurrentTropoIndicator();
+                if (TropoMapActive && container && container.style.display !== 'none' && !isFetchingData) {
                     loadDataForRadius(parseInt(lastSelectedRadius));
                 }
             }
 
-            // Phase 2: full 48h forecast
-            // Wait for any user interaction to finish before proceeding
-            if (!failed) {
-                while (isFetchingData) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-
-                if (needsFull) {
-                    const ok = await fetchWithRetry(lat, lon, 'full');
-                    if (!ok) {
-                        failed = true;
-                    } else if (TropoMapActive && container && container.style.display !== 'none' && !isFetchingData) {
-                        loadDataForRadius(parseInt(lastSelectedRadius));
-                    }
-                }
-            }
-
-            if (failed) {
-                await new Promise(resolve => setTimeout(resolve, 15 * 60 * 1000));
-                continue;
-            }
-
-            // All data fresh – sleep one hour
+            // Sleep one hour then re-check
             await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
         }
     }
 
-// --- LOAD / DISPLAY DATA FOR A GIVEN RADIUS ---
-async function loadDataForRadius(radiusKm) {
-    if (!mapInstance || isFetchingData) return;
+    // --- LOAD / DISPLAY DATA FOR A GIVEN RADIUS ---
+    async function loadDataForRadius(radiusKm) {
+        if (!mapInstance || isFetchingData) return;
 
-    isFetchingData = true;
-    localStorage.setItem('lastSelectedRadius', radiusKm);
-    lastSelectedRadius = radiusKm;
+        isFetchingData = true;
+        localStorage.setItem('lastSelectedRadius', radiusKm);
+        lastSelectedRadius = radiusKm;
 
-    document.querySelectorAll('.radius-btn').forEach(b => {
-        b.disabled      = true;
-        b.style.opacity = '0.4';
-        b.style.cursor  = 'not-allowed';
-        b.classList.remove('color-4');
-        b.innerHTML     = `${b.id.replace('btn-', '')}km`;
-    });
+        document.querySelectorAll('.radius-btn').forEach(b => {
+            b.disabled      = true;
+            b.style.opacity = '0.4';
+            b.style.cursor  = 'not-allowed';
+            b.classList.remove('color-4');
+            b.innerHTML     = `${b.id.replace('btn-', '')}km`;
+        });
 
-    const activeBtn = document.getElementById(`btn-${radiusKm}`);
-    if (activeBtn) {
-        activeBtn.classList.add('color-4');
-        activeBtn.style.opacity = '1';
-        activeBtn.innerHTML     = `${radiusKm}km <span class="spin" style="font-size:10px">⟳</span>`;
-    }
-
-    const statusEl = document.getElementById('tropo-status-overlay');
-    if (statusEl) {
-        statusEl.innerHTML     = `<span class="spin">⟳</span> Fetching data...`;
-        statusEl.style.display = 'block';
-    }
-
-    const wasPlaying = isPlaying;
-    if (animationFrameId) { clearTimeout(animationFrameId); animationFrameId = null; }
-    isPlaying = false;
-
-    let center;
-    const qLat = localStorage.getItem('qthLatitude');
-    const qLon = localStorage.getItem('qthLongitude');
-
-    if      (gpsData.status === 'active' && gpsData.lat && gpsData.lon) center = { lat: parseFloat(gpsData.lat), lng: parseFloat(gpsData.lon) };
-    else if (qLat && qLon)                                               center = { lat: parseFloat(qLat),       lng: parseFloat(qLon) };
-    else                                                                  center = mapInstance.getCenter();
-
-    if      (gpsData.status === 'active' && gpsData.lat && gpsData.lon) drawPositionMarker(gpsData.lat, gpsData.lon);
-    else if (qLat && qLon)                                               drawPositionMarker(qLat, qLon);
-
-    try {
-        const data = await fetchAndCacheTropoData(center.lat, center.lng, 'current');
-
-        if (weatherOverlayCanvas) {
-            weatherOverlayCanvas.getContext('2d').clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
+        const activeBtn = document.getElementById(`btn-${radiusKm}`);
+        if (activeBtn) {
+            activeBtn.classList.add('color-4');
+            activeBtn.style.opacity = '1';
+            activeBtn.innerHTML     = `${radiusKm}km <span class="spin" style="font-size:10px">⟳</span>`;
         }
 
-        // Overlay always covers the full 500km extent for correct pixel mapping
-        apiBounds = data.bounds;
-
-        // Zoom viewport to requested radius – zero extra API calls
-        const viewBounds = calculateBounds(center.lat, center.lng, radiusKm);
-        mapInstance.fitBounds(
-            L.latLngBounds([viewBounds.minLat, viewBounds.minLon], [viewBounds.maxLat, viewBounds.maxLon]),
-            { padding: [0, 0], animate: false }
-        );
-        mapInstance.invalidateSize();
-
-        const now            = new Date();
-        const currentUtcTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()));
-
-        frames = data.frames
-            .map(f => ({ time: new Date(f.time + 'Z'), visValues: new Float32Array(f.visValues), renderedImage: null }))
-            .filter(f => f.time >= currentUtcTime);
-
-        if (frames.length === 0 && data.frames.length > 0) {
-            frames = data.frames.map(f => ({
-                time: new Date(f.time + 'Z'), visValues: new Float32Array(f.visValues), renderedImage: null
-            }));
-        }
-
-        const slider = document.getElementById('tropo-timeline');
-        if (slider && frames.length > 0) {
-            slider.max        = frames.length - 1;
-            currentFrameIndex = 0;
-            slider.value      = 0;
-        }
-
-        if (statusEl) statusEl.style.display = 'none';
-
-        if (frames.length > 0) {
-            renderFrame(currentFrameIndex);
-            updateCurrentTropoIndicator();
-            if (wasPlaying) { isPlaying = true; animationLoop(); }
-            else            { updatePlayButton(); }
-        } else {
-            if (statusEl) { statusEl.innerText = "No data!"; statusEl.style.display = 'block'; }
-        }
-
-        const cooldownTime = data.fromCache ? 0 : 1000;
-        if (cooldownTime > 0 && activeBtn) activeBtn.innerHTML = `${radiusKm}km ⏳`;
-
-        // If we successfully loaded displayable data but the background worker
-        // hasn't promoted the status yet, promote it now so buttons unlock immediately.
-        if (frames.length > 0 && (masterFetchStatus === 'pending' || masterFetchStatus === 'loading_current')) {
-            masterFetchStatus = 'ready_current';
-        }
-
-        setTimeout(() => {
-            isFetchingData = false;
-            updateAllButtons(masterFetchStatus);
-            document.querySelectorAll('.radius-btn').forEach(b => {
-                b.style.opacity = b.disabled ? '0.4' : '1';
-                b.style.cursor  = b.disabled ? 'not-allowed' : 'pointer';
-                b.classList.remove('color-4');
-            });
-            const reActiveBtn = document.getElementById(`btn-${radiusKm}`);
-            if (reActiveBtn && !reActiveBtn.disabled) reActiveBtn.classList.add('color-4');
-        }, cooldownTime);
-
-    } catch (e) {
-        console.error('[TropoForecast] Error:', e);
+        const statusEl = document.getElementById('tropo-status-overlay');
         if (statusEl) {
-            statusEl.innerText = '⚠️ API Error (Limit Reached). Wait 1 Hour.';
-            setTimeout(() => { statusEl.style.display = 'none'; }, 5000);
+            statusEl.innerHTML     = `<span class="spin">⟳</span> Fetching data...`;
+            statusEl.style.display = 'block';
         }
-        isFetchingData = false;
-        updateAllButtons('error');
+
+        const wasPlaying = isPlaying;
+        if (animationFrameId) { clearTimeout(animationFrameId); animationFrameId = null; }
+        isPlaying = false;
+
+        let center;
+        const qLat = localStorage.getItem('qthLatitude');
+        const qLon = localStorage.getItem('qthLongitude');
+
+        if      (gpsData.status === 'active' && gpsData.lat && gpsData.lon) center = { lat: parseFloat(gpsData.lat), lng: parseFloat(gpsData.lon) };
+        else if (qLat && qLon)                                               center = { lat: parseFloat(qLat),       lng: parseFloat(qLon) };
+        else                                                                  center = mapInstance.getCenter();
+
+        if      (gpsData.status === 'active' && gpsData.lat && gpsData.lon) drawPositionMarker(gpsData.lat, gpsData.lon);
+        else if (qLat && qLon)                                               drawPositionMarker(qLat, qLon);
+
+        try {
+            const data    = await fetchAndCacheTropoData(center.lat, center.lng);
+            const results = data.results;
+
+            if (weatherOverlayCanvas) {
+                weatherOverlayCanvas.getContext('2d').clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
+            }
+
+            // Overlay always covers the full 500km extent for correct pixel mapping
+            apiBounds = data.bounds;
+
+            // Zoom viewport to requested radius, zero extra API calls
+            const viewBounds = calculateBounds(center.lat, center.lng, radiusKm);
+            mapInstance.fitBounds(
+                L.latLngBounds([viewBounds.minLat, viewBounds.minLon], [viewBounds.maxLat, viewBounds.maxLon]),
+                { padding: [0, 0], animate: false }
+            );
+            mapInstance.invalidateSize();
+
+            // Build frames starting from the current UTC hour.
+            // The server returns forecast_hours=12, so time[0] = current hour from the model.
+            // We find the current hour in the array to skip any stale leading entries.
+            const timeArray  = results[0].hourly.time;
+            const nowUtc     = new Date();
+            const nowIso     = nowUtc.toISOString().slice(0, 13) + ':00';
+            const nowUtcHour = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate(), nowUtc.getUTCHours()));
+
+            let startIdx = timeArray.findIndex(t => t === nowIso);
+            if (startIdx < 0) startIdx = 0;
+
+            frames = [];
+            for (let h = 0; h < timeArray.length - startIdx; h++) {
+                const hourIdx  = startIdx + h;
+                if (hourIdx >= timeArray.length) break;
+                const timeDate = new Date(timeArray[hourIdx] + 'Z');
+                if (timeDate < nowUtcHour) continue; // skip past hours from stale cache
+
+                const visValues = new Float32Array(results.length);
+                for (let i = 0; i < results.length; i++) {
+                    if (results[i] && results[i].hourly) {
+                        visValues[i] = calculateTropoIndexPrecise(results[i].hourly, hourIdx);
+                    }
+                }
+                frames.push({ time: timeDate, visValues, renderedImage: null });
+            }
+
+            if (frames.length === 0 && timeArray.length > 0) {
+                // All data is technically in the past
+                const hourIdx   = 0;
+                const timeDate  = new Date(timeArray[0] + 'Z');
+                const visValues = new Float32Array(results.length);
+                for (let i = 0; i < results.length; i++) {
+                    if (results[i] && results[i].hourly) {
+                        visValues[i] = calculateTropoIndexPrecise(results[i].hourly, hourIdx);
+                    }
+                }
+                frames.push({ time: timeDate, visValues, renderedImage: null });
+            }
+
+            lastHourChecked = getLastFullHour();
+
+            const slider = document.getElementById('tropo-timeline');
+            if (slider && frames.length > 0) {
+                slider.max        = frames.length - 1;
+                currentFrameIndex = 0;
+                slider.value      = 0;
+            }
+
+            if (statusEl) statusEl.style.display = 'none';
+
+            if (frames.length > 0) {
+                renderFrame(currentFrameIndex);
+                updateCurrentTropoIndicator();
+                if (wasPlaying) { isPlaying = true; animationLoop(); }
+                else            { updatePlayButton(); }
+            } else {
+                if (statusEl) { statusEl.innerText = "No data!"; statusEl.style.display = 'block'; }
+            }
+
+            if (masterFetchStatus === 'pending' || masterFetchStatus === 'loading') {
+                masterFetchStatus = 'ready';
+            }
+
+            setTimeout(() => {
+                isFetchingData = false;
+                updateAllButtons(masterFetchStatus);
+                document.querySelectorAll('.radius-btn').forEach(b => {
+                    b.style.opacity = b.disabled ? '0.4' : '1';
+                    b.style.cursor  = b.disabled ? 'not-allowed' : 'pointer';
+                    b.classList.remove('color-4');
+                });
+                const reActiveBtn = document.getElementById(`btn-${radiusKm}`);
+                if (reActiveBtn && !reActiveBtn.disabled) reActiveBtn.classList.add('color-4');
+            }, data.fromCache ? 0 : 500);
+
+        } catch (e) {
+            console.error('[TropoForecast] Error:', e);
+            if (statusEl) {
+                statusEl.innerText = '⚠️ Server Error. Check that TropoForecast_server.js is running.';
+                setTimeout(() => { statusEl.style.display = 'none'; }, 5000);
+            }
+            isFetchingData = false;
+            updateAllButtons('error');
+        }
     }
-}
 
     // --- Drag & Drop ---
     function makeDraggable(el) {
@@ -1096,7 +1042,7 @@ async function loadDataForRadius(radiusKm) {
             #tropo-map-container { position:relative; z-index:1; }
             #tropo-map-container .leaflet-pane { z-index:auto; }
             #tropo-map-container .leaflet-top, #tropo-map-container .leaflet-bottom { z-index:2; }
-            .high-contrast-map { filter:brightness(3) contrast(1) !important; }
+            .high-contrast-map { filter: brightness(3.8) contrast(1.18) !important; } /* // AAD */
             #tropo-content { padding:5px; background:#0a0a0a; border-top:1px solid #222; max-height:500px; overflow-y:auto; position:relative; z-index:10000; }
             input[type=range].tropo-slider { -webkit-appearance:none; width:100%; background:transparent; margin:0; }
             input[type=range].tropo-slider:focus { outline:none; }
@@ -1104,6 +1050,11 @@ async function loadDataForRadius(radiusKm) {
             input[type=range].tropo-slider:disabled::-webkit-slider-thumb { background:#555; cursor:not-allowed; }
             input[type=range].tropo-slider::-webkit-slider-runnable-track { width:100%; height:4px; cursor:pointer; background:rgba(255,255,255,0.3); border-radius:2px; }
             input[type=range].tropo-slider:disabled::-webkit-slider-runnable-track { background:rgba(255,255,255,0.1); cursor:not-allowed; }
+
+            /* Firefox // AAD */
+            input[type=range].tropo-slider { -webkit-appearance: none; width: 100%; height: 4px; background: #333; margin: 0; }
+            input[type=range].tropo-slider::-moz-range-thumb { width: 20px; background: #eee; }
+
             @keyframes spin { 100% { transform:rotate(360deg); } }
             .spin { display:inline-block; animation:spin 1s infinite linear; }
             .radius-btn { background:transparent; border:1px solid #444; color:#fff; padding:4px 8px; font-size:11px; cursor:pointer; border-radius:4px; transition:all 0.2s; min-width:45px; text-align:center; }
@@ -1128,7 +1079,7 @@ async function loadDataForRadius(radiusKm) {
         let savedLeft = localStorage.getItem('tropoLeft') || '20px';
         if (parseInt(savedTop)  < 0 || parseInt(savedTop)  > window.innerHeight - 50) savedTop  = '20px';
         if (parseInt(savedLeft) < 0 || parseInt(savedLeft) > window.innerWidth  - 50) savedLeft = '20px';
-        container.style.cssText = `position:fixed;top:${savedTop};left:${savedLeft};width:440px;height:625px;display:none;flex-direction:column;background:var(--color-1);z-index:9999;isolation:isolate;`;
+        container.style.cssText = `position:fixed;top:${savedTop};left:${savedLeft};width:440px;height:625px;display:none;flex-direction:column;background:var(--color-1);z-index:19;isolation:isolate;`; // AAD
 
         const header = document.createElement('div');
         header.id        = 'tropo-header';
@@ -1158,7 +1109,7 @@ async function loadDataForRadius(radiusKm) {
                     <span style="color:white;font-weight:bold;" id="tropo-clock" title="UTC Time">--:-- UTC</span>
                     <span id="tropo-offset" style="color:var(--color-4);">(+0h)</span>
                 </div>
-                <input type="range" id="tropo-timeline" class="tropo-slider" min="0" max="47" value="0">
+                <input type="range" id="tropo-timeline" class="tropo-slider" min="0" max="11" value="0">
             </div>
         `;
         controls.appendChild(topControls);
@@ -1190,6 +1141,14 @@ async function loadDataForRadius(radiusKm) {
         container.appendChild(controls);
         document.body.appendChild(container);
 
+        if (!locationName) {
+            const _lat = localStorage.getItem('qthLatitude');
+            const _lon = localStorage.getItem('qthLongitude');
+            if (_lat && _lon) {
+                const _key = `tropo_v${CACHE_VERSION}_${Math.round(parseFloat(_lat) * 100)}_${Math.round(parseFloat(_lon) * 100)}_500`;
+                try { const _c = JSON.parse(localStorage.getItem(_key)); if (_c && _c.locationName) locationName = _c.locationName; if (_c && _c.forecastHours) forecastHours = _c.forecastHours; } catch {}
+            }
+        }
         updateHeaderCoordinates();
         updateAllButtons(masterFetchStatus);
 

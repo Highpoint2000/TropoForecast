@@ -5,11 +5,14 @@ Local and regional tropo forecast for FMDX web server
 
 ![TropoForecast](https://github.com/user-attachments/assets/586405e1-68f0-4c88-97f3-87d4f2e6c9f4)
 
-## Version 1.2
+## Version 2.0
 
-- API error 429 was fixed by querying the Open Meteo API once
-- 100 km zoom level added
-- Minor design adjustments
+- New Client-Server Architecture: Moved all data fetching from the browser directly to a dedicated backend module (TropoForecast_server.js) using WebSockets.  
+- Massive API Optimization & Caching: The server now handles the heavy lifting, requesting the 500km grid once and caching it server-side for 3 hours. This effectively prevents browser CORS errors and API rate-limit bans.  
+- Simplified Loading Logic: Removed the complex, two-phase loading process. The system now performs a single, stable data request.  
+– Minor changes to the UI & styling
+
+Thanks to AmateurAudioDude for modifying and adapting the code for the server variant!
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
@@ -32,6 +35,12 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 1.2
+
+- API error 429 was fixed by querying the Open Meteo API once
+- 100 km zoom level added
+- Minor design adjustments
 
 ### Version 1.1a
 
