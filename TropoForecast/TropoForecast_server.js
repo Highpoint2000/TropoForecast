@@ -63,7 +63,7 @@ function buildHourlyParams() {
     return params.join(',');
 }
 
-function httpGetJson(url) {
+function httpGetJson(url, label = 'API') {
     return new Promise((resolve, reject) => {
         const req = https.get(url, (res) => {
             if (res.statusCode && res.statusCode >= 400) {
@@ -74,6 +74,7 @@ function httpGetJson(url) {
             let raw = '';
             res.on('data', c => raw += c);
             res.on('end', () => {
+                logInfo(`[${PLUGIN_NAME}] ${label} fetch: ${(raw.length / 1024).toFixed(1)} KB received`);
                 try { resolve(JSON.parse(raw)); }
                 catch (e) { reject(new Error('invalid JSON from API')); }
             });
@@ -96,7 +97,7 @@ async function fetchGrid(lat, lon, radiusKm) {
         }
     }
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&hourly=${buildHourlyParams()}&forecast_hours=${FORECAST_HOURS}&models=best_match`;
-    const json = await httpGetJson(url);
+    const json = await httpGetJson(url, 'grid');
     let results = [];
     if (json.hourly) results = [json];
     else if (Array.isArray(json)) results = json;
@@ -104,10 +105,102 @@ async function fetchGrid(lat, lon, radiusKm) {
 
     // Separate minimal request with timezone=auto to get the local timezone name
     const tzUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&timezone=auto&hourly=temperature_2m&forecast_hours=1&models=best_match`;
-    const tzJson = await httpGetJson(tzUrl).catch(() => null);
+    const tzJson = await httpGetJson(tzUrl, 'timezone').catch(() => null);
     const locationName = tzJson ? parseLocationName(tzJson.timezone) : null;
 
-    return { results, bounds, locationName };
+    const { time, grid } = buildIndexGrid(results);
+    return { time, grid, bounds, locationName };
+}
+
+// --- PHYSICS ENGINE (mirrors the tropo-index formula, run once here instead of once per client) ---
+const PRESSURE_LEVELS = [1000, 975, 950, 925, 900, 875, 850];
+const LEVEL_HEIGHTS = { 1000: 0.11, 975: 0.32, 950: 0.54, 925: 0.76, 900: 0.99, 875: 1.22, 850: 1.46 };
+
+function calcVaporPressure(tempC, rh) {
+    const es = 6.112 * Math.exp((17.67 * tempC) / (tempC + 243.5));
+    return es * (rh / 100.0);
+}
+
+function calcN(tempC, rh, pressureHPa) {
+    const tempK = tempC + 273.15;
+    const e = calcVaporPressure(tempC, rh);
+    return (77.6 / tempK) * (pressureHPa + 4810 * (e / tempK));
+}
+
+function calcWindShear(uLow, vLow, uUp, vUp, dh) {
+    const du = uUp - uLow;
+    const dv = vUp - vLow;
+    return Math.sqrt(du * du + dv * dv) / dh;
+}
+
+function calculateTropoIndexPrecise(hourly, idx) {
+    let maxGradientMag = 0;
+    let shearAtMaxGradient = 0;
+
+    for (let i = 0; i < PRESSURE_LEVELS.length - 1; i++) {
+        const lowerP = PRESSURE_LEVELS[i];
+        const upperP = PRESSURE_LEVELS[i + 1];
+        if (!hourly[`temperature_${lowerP}hPa`] || !hourly[`temperature_${upperP}hPa`]) continue;
+
+        const tLow = hourly[`temperature_${lowerP}hPa`][idx];
+        const rhLow = hourly[`relative_humidity_${lowerP}hPa`][idx];
+        const tUp = hourly[`temperature_${upperP}hPa`][idx];
+        const rhUp = hourly[`relative_humidity_${upperP}hPa`][idx];
+
+        if (tLow === undefined || tUp === undefined || rhLow === undefined || rhUp === undefined) continue;
+
+        const nLow = calcN(tLow, rhLow, lowerP);
+        const nUp = calcN(tUp, rhUp, upperP);
+        const dh = LEVEL_HEIGHTS[upperP] - LEVEL_HEIGHTS[lowerP];
+        const gradient = (nUp - nLow) / dh;
+
+        if (gradient < -60 && Math.abs(gradient) > maxGradientMag) {
+            maxGradientMag = Math.abs(gradient);
+
+            const wsLow = hourly[`wind_speed_${lowerP}hPa`] ? hourly[`wind_speed_${lowerP}hPa`][idx] : undefined;
+            const wdLow = hourly[`wind_direction_${lowerP}hPa`] ? hourly[`wind_direction_${lowerP}hPa`][idx] : undefined;
+            const wsUp = hourly[`wind_speed_${upperP}hPa`] ? hourly[`wind_speed_${upperP}hPa`][idx] : undefined;
+            const wdUp = hourly[`wind_direction_${upperP}hPa`] ? hourly[`wind_direction_${upperP}hPa`][idx] : undefined;
+
+            if (wsLow !== undefined && wdLow !== undefined && wsUp !== undefined && wdUp !== undefined) {
+                const wdLowRad = (wdLow * Math.PI) / 180;
+                const wdUpRad = (wdUp * Math.PI) / 180;
+                const uLow = -wsLow * Math.sin(wdLowRad);
+                const vLow = -wsLow * Math.cos(wdLowRad);
+                const uUp = -wsUp * Math.sin(wdUpRad);
+                const vUp = -wsUp * Math.cos(wdUpRad);
+                shearAtMaxGradient = calcWindShear(uLow, vLow, uUp, vUp, dh);
+            }
+        }
+    }
+
+    if (maxGradientMag < 60) return 0;
+    let index = (maxGradientMag - 60) / 20;
+
+    if (shearAtMaxGradient > 5) {
+        let shearBonus;
+        if (shearAtMaxGradient <= 20) shearBonus = ((shearAtMaxGradient - 5) / 15) * 2.0;
+        else if (shearAtMaxGradient <= 30) shearBonus = 2.0 - ((shearAtMaxGradient - 20) / 10) * 1.0;
+        else shearBonus = 1.0;
+        index += shearBonus;
+    }
+    return Math.max(0, Math.min(10, index));
+}
+
+// Reduce the 144-points x N-hours x 28-variables raw API response down to
+// just the derived index per point/hour, before it ever hits the wire.
+function buildIndexGrid(results) {
+    const timeArray = (results[0] && results[0].hourly) ? results[0].hourly.time : [];
+    const hours = timeArray.length;
+    const grid = new Array(hours);
+    for (let h = 0; h < hours; h++) {
+        const row = new Array(results.length);
+        for (let i = 0; i < results.length; i++) {
+            row[i] = (results[i] && results[i].hourly) ? Math.round(calculateTropoIndexPrecise(results[i].hourly, h) * 100) / 100 : 0;
+        }
+        grid[h] = row;
+    }
+    return { time: timeArray, grid };
 }
 
 function parseLocationName(timezone) {
@@ -122,7 +215,7 @@ function parseLocationName(timezone) {
 
 async function fetchPoint(lat, lon) {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${buildHourlyParams()}&forecast_hours=1&models=best_match`;
-    return await httpGetJson(url);
+    return await httpGetJson(url, 'point');
 }
 
 function getCached(cache, key) {
@@ -158,13 +251,13 @@ async function handleGridRequest(requestId, lat, lon, radius) {
     const numLon = parseFloat(lon);
     const numRadius = parseInt(radius);
     if (!Number.isFinite(numLat) || !Number.isFinite(numLon) || !Number.isFinite(numRadius)) {
-        send('Plugin-Tropo-Grid-Response', { requestId, ok: false, error: 'invalid coordinates' });
+        send('Plugin-Tropo-Grid-Response', { requestIds: [requestId], ok: false, error: 'invalid coordinates' });
         return;
     }
     const key = roundKey(numLat, numLon, numRadius);
     const cached = getCached(gridCache, key);
     if (cached) {
-        send('Plugin-Tropo-Grid-Response', { requestId, ok: true, results: cached.results, bounds: cached.bounds, locationName: cached.locationName, forecastHours: FORECAST_HOURS });
+        send('Plugin-Tropo-Grid-Response', { requestIds: [requestId], ok: true, time: cached.time, grid: cached.grid, bounds: cached.bounds, locationName: cached.locationName, forecastHours: FORECAST_HOURS });
         return;
     }
     if (gridInflight.has(key)) {
@@ -176,12 +269,14 @@ async function handleGridRequest(requestId, lat, lon, radius) {
         const data = await fetchGrid(numLat, numLon, numRadius);
         setCached(gridCache, key, data);
         const waiters = consumeWaiters(gridInflight, key);
-        waiters.forEach(rid => send('Plugin-Tropo-Grid-Response', { requestId: rid, ok: true, results: data.results, bounds: data.bounds, locationName: data.locationName, forecastHours: FORECAST_HOURS }));
+        // Serialise the payload once and fan it out to every waiter
+        // in a single message, instead of re-stringifying it per waiter.
+        send('Plugin-Tropo-Grid-Response', { requestIds: waiters, ok: true, time: data.time, grid: data.grid, bounds: data.bounds, locationName: data.locationName, forecastHours: FORECAST_HOURS });
     } catch (e) {
         const waiters = consumeWaiters(gridInflight, key);
         const msg = e && e.message ? e.message : 'fetch failed';
         logError(`[${PLUGIN_NAME}] grid fetch failed (${key}): ${msg}`);
-        waiters.forEach(rid => send('Plugin-Tropo-Grid-Response', { requestId: rid, ok: false, error: msg }));
+        send('Plugin-Tropo-Grid-Response', { requestIds: waiters, ok: false, error: msg });
     }
 }
 
@@ -195,7 +290,7 @@ async function handlePointRequest(requestId, lat, lon) {
     const key = roundKey(numLat, numLon);
     const cached = getCached(pointCache, key);
     if (cached) {
-        send('Plugin-Tropo-Point-Response', { requestId, ok: true, hourly: cached.hourly });
+        send('Plugin-Tropo-Point-Response', { requestId, ok: true, index: cached.index });
         return;
     }
     if (pointInflight.has(key)) {
@@ -205,9 +300,10 @@ async function handlePointRequest(requestId, lat, lon) {
     addWaiter(pointInflight, key, requestId);
     try {
         const json = await fetchPoint(numLat, numLon);
-        setCached(pointCache, key, json, POINT_CACHE_TTL_MS);
+        const index = json.hourly ? Math.round(calculateTropoIndexPrecise(json.hourly, 0) * 100) / 100 : 0;
+        setCached(pointCache, key, { index }, POINT_CACHE_TTL_MS);
         const waiters = consumeWaiters(pointInflight, key);
-        waiters.forEach(rid => send('Plugin-Tropo-Point-Response', { requestId: rid, ok: true, hourly: json.hourly }));
+        waiters.forEach(rid => send('Plugin-Tropo-Point-Response', { requestId: rid, ok: true, index }));
     } catch (e) {
         const waiters = consumeWaiters(pointInflight, key);
         const msg = e && e.message ? e.message : 'fetch failed';
