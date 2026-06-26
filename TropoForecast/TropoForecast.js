@@ -1,8 +1,8 @@
     /////////////////////////////////////////////////////////////////////
     ///                                                               ///
-    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0  ///
+    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0a ///
     ///                                                               ///
-    ///  by Highpoint                        last update: 2026-06-03  ///
+    ///  by Highpoint                        last update: 2026-06-26  ///
     ///                                                               ///
 	///  Revised by AmateurAudioDude                                  ///
     ///                                                               ///
@@ -18,7 +18,7 @@
     const CHECK_FOR_UPDATES = false;
 
     // Plugin metadata
-    const pluginVersion = '2.0';
+    const pluginVersion = '2.0a';
     const CACHE_VERSION = pluginVersion;
     const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
