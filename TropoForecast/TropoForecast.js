@@ -172,13 +172,18 @@
 
             // Handle server proxy responses
             if (msg.type === 'Plugin-Tropo-Grid-Response' || msg.type === 'Plugin-Tropo-Point-Response') {
-                const entry = pendingWsRequests.get(msg.requestId);
-                if (entry) {
-                    clearTimeout(entry.timeoutId);
-                    pendingWsRequests.delete(msg.requestId);
-                    if (msg.ok) entry.resolve(msg);
-                    else entry.reject(new Error(msg.error || 'request failed'));
-                }
+                // Grid responses fan out one shared payload to every requestId that was
+                // waiting on it (requestIds[]), point responses still use a single requestId.
+                const ids = msg.requestIds || (msg.requestId ? [msg.requestId] : []);
+                ids.forEach(id => {
+                    const entry = pendingWsRequests.get(id);
+                    if (entry) {
+                        clearTimeout(entry.timeoutId);
+                        pendingWsRequests.delete(id);
+                        if (msg.ok) entry.resolve(msg);
+                        else entry.reject(new Error(msg.error || 'request failed'));
+                    }
+                });
                 return;
             }
 
@@ -308,7 +313,7 @@
                 masterBtn.title     = `Display 500km forecast (${forecastHours ? forecastHours + 'h' : '...'})` ;
             } else if (state === 'error') {
                 masterBtn.disabled  = true;
-                masterBtn.innerHTML = `500km ⚠️`;
+                masterBtn.innerHTML = `500km \u26A0\uFE0F`;
                 masterBtn.title     = "API Hourly/Daily Limit Reached.";
             } else if (state === 'retrying') {
                 masterBtn.disabled  = true;
@@ -341,80 +346,6 @@
         document.head.appendChild(script);
     }
 
-    // --- PHYSICS ENGINE ---
-    function calcVaporPressure(tempC, rh) {
-        const es = 6.112 * Math.exp((17.67 * tempC) / (tempC + 243.5));
-        return es * (rh / 100.0);
-    }
-
-    function calcN(tempC, rh, pressureHPa) {
-        const tempK = tempC + 273.15;
-        const e     = calcVaporPressure(tempC, rh);
-        return (77.6 / tempK) * (pressureHPa + 4810 * (e / tempK));
-    }
-
-    function calcWindShear(uLow, vLow, uUp, vUp, dh) {
-        const du = uUp - uLow;
-        const dv = vUp - vLow;
-        return Math.sqrt(du * du + dv * dv) / dh;
-    }
-
-    function calculateTropoIndexPrecise(hourly, idx) {
-        const levels  = [1000, 975, 950, 925, 900, 875, 850];
-        const heights = { 1000: 0.11, 975: 0.32, 950: 0.54, 925: 0.76, 900: 0.99, 875: 1.22, 850: 1.46 };
-        let maxGradientMag     = 0;
-        let shearAtMaxGradient = 0;
-
-        for (let i = 0; i < levels.length - 1; i++) {
-            const lowerP = levels[i];
-            const upperP = levels[i + 1];
-            if (!hourly[`temperature_${lowerP}hPa`] || !hourly[`temperature_${upperP}hPa`]) continue;
-
-            const tLow  = hourly[`temperature_${lowerP}hPa`][idx];
-            const rhLow = hourly[`relative_humidity_${lowerP}hPa`][idx];
-            const tUp   = hourly[`temperature_${upperP}hPa`][idx];
-            const rhUp  = hourly[`relative_humidity_${upperP}hPa`][idx];
-
-            if (tLow === undefined || tUp === undefined || rhLow === undefined || rhUp === undefined) continue;
-
-            const nLow     = calcN(tLow, rhLow, lowerP);
-            const nUp      = calcN(tUp,  rhUp,  upperP);
-            const dh       = heights[upperP] - heights[lowerP];
-            const gradient = (nUp - nLow) / dh;
-
-            if (gradient < -60 && Math.abs(gradient) > maxGradientMag) {
-                maxGradientMag = Math.abs(gradient);
-
-                const wsLow = hourly[`wind_speed_${lowerP}hPa`]     ? hourly[`wind_speed_${lowerP}hPa`][idx]     : undefined;
-                const wdLow = hourly[`wind_direction_${lowerP}hPa`] ? hourly[`wind_direction_${lowerP}hPa`][idx] : undefined;
-                const wsUp  = hourly[`wind_speed_${upperP}hPa`]     ? hourly[`wind_speed_${upperP}hPa`][idx]     : undefined;
-                const wdUp  = hourly[`wind_direction_${upperP}hPa`] ? hourly[`wind_direction_${upperP}hPa`][idx] : undefined;
-
-                if (wsLow !== undefined && wdLow !== undefined && wsUp !== undefined && wdUp !== undefined) {
-                    const wdLowRad = (wdLow * Math.PI) / 180;
-                    const wdUpRad  = (wdUp  * Math.PI) / 180;
-                    const uLow = -wsLow * Math.sin(wdLowRad);
-                    const vLow = -wsLow * Math.cos(wdLowRad);
-                    const uUp  = -wsUp  * Math.sin(wdUpRad);
-                    const vUp  = -wsUp  * Math.cos(wdUpRad);
-                    shearAtMaxGradient = calcWindShear(uLow, vLow, uUp, vUp, dh);
-                }
-            }
-        }
-
-        if (maxGradientMag < 60) return 0;
-        let index = (maxGradientMag - 60) / 20;
-
-        if (shearAtMaxGradient > 5) {
-            let shearBonus;
-            if      (shearAtMaxGradient <= 20) shearBonus = ((shearAtMaxGradient - 5)  / 15) * 2.0;
-            else if (shearAtMaxGradient <= 30) shearBonus = 2.0 - ((shearAtMaxGradient - 20) / 10) * 1.0;
-            else                               shearBonus = 1.0;
-            index += shearBonus;
-        }
-        return Math.max(0, Math.min(10, index));
-    }
-
     // --- INDICATOR BUTTON LOGIC ---
     async function updateCurrentTropoIndicator() {
         let lat, lon;
@@ -440,26 +371,21 @@
             return;
         }
 
-        // Cache path: look up the 500km master cache (stores raw results)
+        // Cache path: look up the 500km master cache (stores precomputed index grid)
         const cacheKey      = `tropo_v${CACHE_VERSION}_${Math.round(lat * 100)}_${Math.round(lon * 100)}_500`;
         const cachedDataStr = localStorage.getItem(cacheKey);
 
         if (cachedDataStr) {
             try {
                 const cached = JSON.parse(cachedDataStr);
-                if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs && cached.results && cached.results.length > 0) {
+                if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs && cached.grid && cached.grid.length > 0) {
                     const bounds    = calculateBounds(lat, lon, 500);
-                    const timeArray = cached.results[0].hourly.time;
+                    const timeArray = cached.time;
                     const nowIso    = new Date().toISOString().slice(0, 13) + ':00';
                     let idx         = timeArray.findIndex(t => t === nowIso);
                     if (idx < 0) idx = 0;
 
-                    const visValues = new Float32Array(cached.results.length);
-                    for (let i = 0; i < cached.results.length; i++) {
-                        if (cached.results[i] && cached.results[i].hourly) {
-                            visValues[i] = calculateTropoIndexPrecise(cached.results[i].hourly, idx);
-                        }
-                    }
+                    const visValues = new Float32Array(cached.grid[idx]);
                     const val  = interpolateGridValue(lat, lon, visValues, bounds, getGridSize());
                     const cIdx2 = val > 0.5 ? Math.round(val) : 0;
                     const cIdx = Math.max(0, Math.min(cIdx2, 10));
@@ -482,10 +408,8 @@
 
         try {
             const resp = await wsRequest('Plugin-Tropo-Point-Request', { lat, lon });
-            const hourly = resp.hourly;
-            // Server returns forecast_hours=1, so index 0 is the current hour
-            if (hourly && hourly.time) {
-                const indexVal = calculateTropoIndexPrecise(hourly, 0);
+            if (typeof resp.index === 'number') {
+                const indexVal = resp.index;
                 const idx      = indexVal > 0.5 ? Math.round(indexVal) : 0;
                 const cIdx     = Math.max(0, Math.min(idx, 10));
                 applyIndicatorColor(PALETTE[cIdx].color, PALETTE[cIdx].label, idx);
@@ -734,21 +658,21 @@
         if (cachedRaw) {
             try {
                 const cached = JSON.parse(cachedRaw);
-                if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs && cached.results && cached.results.length > 0) {
+                if (Date.now() - cached.timestamp < CONFIG.cacheValidityMs && cached.grid && cached.grid.length > 0) {
                     if (cached.locationName) locationName = cached.locationName;
                     if (cached.forecastHours) forecastHours = cached.forecastHours;
-                    return { results: cached.results, bounds, fromCache: true };
+                    return { time: cached.time, grid: cached.grid, bounds, fromCache: true };
                 }
             } catch (e) { }
         }
 
-        const resp    = await wsRequest('Plugin-Tropo-Grid-Request', { lat: centerLat, lon: centerLon, radius: radiusKm });
-        const results = Array.isArray(resp.results) ? resp.results : [];
-        if (!results.length) throw new Error('Empty grid response from server');
+        const resp = await wsRequest('Plugin-Tropo-Grid-Request', { lat: centerLat, lon: centerLon, radius: radiusKm });
+        const grid = Array.isArray(resp.grid) ? resp.grid : [];
+        if (!grid.length) throw new Error('Empty grid response from server');
         if (resp.locationName) locationName = resp.locationName;
         if (resp.forecastHours) forecastHours = resp.forecastHours;
 
-        const cachePayload = JSON.stringify({ results, locationName, forecastHours, timestamp: Date.now() });
+        const cachePayload = JSON.stringify({ time: resp.time, grid, locationName, forecastHours, timestamp: Date.now() });
         try {
             localStorage.setItem(cacheKey, cachePayload);
         } catch (e) {
@@ -760,7 +684,7 @@
             }
         }
 
-        return { results, bounds, fromCache: false };
+        return { time: resp.time, grid, bounds, fromCache: false };
     }
 
     async function fetchWithRetry(lat, lon) {
@@ -893,8 +817,8 @@
         else if (qLat && qLon)                                               drawPositionMarker(qLat, qLon);
 
         try {
-            const data    = await fetchAndCacheTropoData(center.lat, center.lng);
-            const results = data.results;
+            const data = await fetchAndCacheTropoData(center.lat, center.lng);
+            const grid = data.grid;
 
             if (weatherOverlayCanvas) {
                 weatherOverlayCanvas.getContext('2d').clearRect(0, 0, weatherOverlayCanvas.width, weatherOverlayCanvas.height);
@@ -914,7 +838,7 @@
             // Build frames starting from the current UTC hour.
             // The server returns forecast_hours=12, so time[0] = current hour from the model.
             // We find the current hour in the array to skip any stale leading entries.
-            const timeArray  = results[0].hourly.time;
+            const timeArray  = data.time;
             const nowUtc     = new Date();
             const nowIso     = nowUtc.toISOString().slice(0, 13) + ':00';
             const nowUtcHour = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate(), nowUtc.getUTCHours()));
@@ -929,26 +853,13 @@
                 const timeDate = new Date(timeArray[hourIdx] + 'Z');
                 if (timeDate < nowUtcHour) continue; // skip past hours from stale cache
 
-                const visValues = new Float32Array(results.length);
-                for (let i = 0; i < results.length; i++) {
-                    if (results[i] && results[i].hourly) {
-                        visValues[i] = calculateTropoIndexPrecise(results[i].hourly, hourIdx);
-                    }
-                }
-                frames.push({ time: timeDate, visValues, renderedImage: null });
+                frames.push({ time: timeDate, visValues: new Float32Array(grid[hourIdx]), renderedImage: null });
             }
 
             if (frames.length === 0 && timeArray.length > 0) {
                 // All data is technically in the past
-                const hourIdx   = 0;
-                const timeDate  = new Date(timeArray[0] + 'Z');
-                const visValues = new Float32Array(results.length);
-                for (let i = 0; i < results.length; i++) {
-                    if (results[i] && results[i].hourly) {
-                        visValues[i] = calculateTropoIndexPrecise(results[i].hourly, hourIdx);
-                    }
-                }
-                frames.push({ time: timeDate, visValues, renderedImage: null });
+                const timeDate = new Date(timeArray[0] + 'Z');
+                frames.push({ time: timeDate, visValues: new Float32Array(grid[0]), renderedImage: null });
             }
 
             lastHourChecked = getLastFullHour();
@@ -990,7 +901,7 @@
         } catch (e) {
             console.error('[TropoForecast] Error:', e);
             if (statusEl) {
-                statusEl.innerText = '⚠️ Server Error. Check that TropoForecast_server.js is running.';
+                statusEl.innerText = '\u26A0\uFE0F Unable to load forecast data. Please try again later.';
                 setTimeout(() => { statusEl.style.display = 'none'; }, 5000);
             }
             isFetchingData = false;
