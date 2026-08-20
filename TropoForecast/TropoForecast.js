@@ -362,9 +362,14 @@
             return;
         }
 
-        // Fast path: use already-rendered frame data
-        if (apiBounds && frames.length > 0 && frames[currentFrameIndex]) {
-            const val  = interpolateGridValue(lat, lon, frames[currentFrameIndex].visValues, apiBounds, getGridSize());
+        // Fast path: use already-rendered frame data (force CURRENT time, ignore slider)
+        if (apiBounds && frames.length > 0) {
+            const nowUtcHour = new Date();
+            nowUtcHour.setUTCMinutes(0, 0, 0);
+            // Suche den Frame, der der aktuellen UTC-Stunde entspricht
+            const currentFrame = frames.find(f => f.time.getTime() === nowUtcHour.getTime()) || frames[0];
+            
+            const val  = interpolateGridValue(lat, lon, currentFrame.visValues, apiBounds, getGridSize());
             const idx  = val > 0.5 ? Math.round(val) : 0;
             const cIdx = Math.max(0, Math.min(idx, 10));
             applyIndicatorColor(PALETTE[cIdx].color, PALETTE[cIdx].label, idx);
@@ -1133,7 +1138,6 @@
             if (animationFrameId) { clearTimeout(animationFrameId); animationFrameId = null; }
             updatePlayButton();
             renderFrame(parseInt(e.target.value));
-            updateCurrentTropoIndicator();
         });
         [100, 200, 300, 400, 500].forEach(km => {
             document.getElementById(`btn-${km}`).addEventListener('click', () => loadDataForRadius(km));

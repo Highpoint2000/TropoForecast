@@ -215,7 +215,7 @@ function parseLocationName(timezone) {
 }
 
 async function fetchPoint(lat, lon) {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${buildHourlyParams()}&forecast_hours=1&models=best_match`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${buildHourlyParams()}&forecast_hours=1&models=icon_eu`;
     return await httpGetJson(url, 'point');
 }
 
