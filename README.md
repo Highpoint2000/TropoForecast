@@ -5,11 +5,11 @@ Local and regional tropo forecast for FMDX web server
 
 ![TropoForecast](https://github.com/user-attachments/assets/586405e1-68f0-4c88-97f3-87d4f2e6c9f4)
 
-## Version 2.0a
+## Version 2.0b
 
-- Reduce server-side CPU usage spikes
-
-Many thanks to AmateurAudioDude for this code improvements!
+- Switched the Open-Meteo API query from best_match to icon_eu to ensure the model provides sufficient geographical coverage for the 500km radius, eliminating edge-clamping and duplicate horizontal/vertical data bands
+- Replaced the standard Hepburn-style rainbow colors with a custom, highly visible thermal color scale. This provides far better contrast against the dark base map, especially for lower-level values
+- Overhauled the legend labels to use practical signal propagation terms instead of generic weather qualities
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
@@ -32,6 +32,12 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.0a
+
+- Reduce server-side CPU usage spikes
+
+Many thanks to AmateurAudioDude for this code improvements!
 
 ### Version 2.0
 

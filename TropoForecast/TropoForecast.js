@@ -1,8 +1,8 @@
     /////////////////////////////////////////////////////////////////////
     ///                                                               ///
-    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0a ///
+    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0b ///
     ///                                                               ///
-    ///  by Highpoint                        last update: 2026-06-26  ///
+    ///  by Highpoint                        last update: 2026-08-20  ///
     ///                                                               ///
 	///  Revised by AmateurAudioDude                                  ///
     ///                                                               ///
@@ -18,7 +18,7 @@
     const CHECK_FOR_UPDATES = false;
 
     // Plugin metadata
-    const pluginVersion = '2.0a';
+    const pluginVersion = '2.0b';
     const CACHE_VERSION = pluginVersion;
     const pluginName = "TropoForecast";
     const pluginHomepageUrl = "https://github.com/Highpoint2000/TropoForecast/releases";
@@ -226,7 +226,7 @@
     // ------------- Core Configuration -------------------
     const CONFIG = {
         renderRes:       1024,
-        masterRadius:    500,
+        masterRadius:    650,
         defaultRadius:   500,
         blurAmount:      'blur(1.2px)',
         opacity:         0.80,
@@ -234,17 +234,17 @@
     };
 
     const PALETTE = [
-        {color: 'rgba(0,0,0,0)',        label: ''},
-        {color: 'rgba(134,3,241,0.8)',  label: 'Marginal'},
-        {color: 'rgba(1,180,239,0.8)',  label: 'Fair'},
-        {color: 'rgba(2,208,131,0.9)',  label: 'Moderate'},
-        {color: 'rgba(165,235,1,0.9)',  label: 'Good'},
-        {color: 'rgba(239,222,5,0.9)',  label: 'Very Good'},
-        {color: 'rgba(233,177,12,1.0)', label: 'Excellent'},
-        {color: 'rgba(255,128,0,1.0)',  label: 'Intense'},
-        {color: 'rgba(255,0,0,1.0)',    label: 'Extreme'},
-        {color: 'rgba(255,128,192,1.0)',label: 'Extreme+'},
-        {color: 'rgba(255,180,220,1.0)',label: 'Max'}
+        {color: 'rgba(0,0,0,0)',           label: ''},
+        {color: 'rgba(150,50,220,0.7)',    label: 'Trace'},       // Minimal signal fading
+        {color: 'rgba(200,50,160,0.8)',    label: 'Weak'},        // Weak signals
+        {color: 'rgba(240,60,100,0.8)',    label: 'Elevated'},    // Slightly elevated conditions
+        {color: 'rgba(255,90,40,0.9)',     label: 'Enhanced'},    // Clearly enhanced signals
+        {color: 'rgba(255,140,10,0.9)',    label: 'Strong'},      // Strong signals, RDS possible
+        {color: 'rgba(255,190,0,1.0)',     label: 'Very Strong'}, // Very strong signals, stable RDS
+        {color: 'rgba(255,230,50,1.0)',    label: 'Band Open'},   // Band opens for long distance DX
+        {color: 'rgba(255,245,130,1.0)',   label: 'Extreme DX'},  // Exceptional ranges
+        {color: 'rgba(255,250,200,1.0)',   label: 'Ducting'},     // Tropo ducting
+        {color: 'rgba(255,255,255,1.0)',   label: 'Solid Duct'}   // Maximum ducting, extreme conditions
     ];
 
     let TropoMapActive       = false;
@@ -432,8 +432,8 @@
         }
 
         if (color === 'rgba(0,0,0,0)' || !color) {
-            indicator.style.backgroundColor = 'rgba(255,255,255,0.15)';
-            indicator.title = 'Current Tropo: None/Marginal';
+            indicator.style.backgroundColor = 'transparent';
+            indicator.title = 'Current Tropo: None / Normal Conditions';
         } else {
             indicator.style.backgroundColor = color;
             indicator.title = `Current Tropo: ${label} (+${indexVal})`;
@@ -1036,7 +1036,6 @@
         legend.style.cssText = "display:flex;gap:1px;margin-top:5px;background:#000;padding:5px;border-radius:4px;";
         legend.innerHTML = PALETTE.slice(1).map((p, i) => `
             <div class="legend-item">
-                <div style="font-size:11px;font-weight:bold;color:#fff;margin-bottom:2px;">+${i + 1}</div>
                 <div class="legend-color" style="background:${p.color};"></div>
                 <div class="legend-label">${p.label}</div>
             </div>

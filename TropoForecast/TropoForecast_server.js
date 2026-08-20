@@ -1,8 +1,8 @@
     /////////////////////////////////////////////////////////////////////
     ///                                                               ///
-    ///  TROPO FORECAST (SERVER MODUL) FOR FM-DX-WEBSERVER      V2.0a ///
+    ///  TROPO FORECAST (SERVER MODUL) FOR FM-DX-WEBSERVER      V2.0b ///
     ///                                                               ///
-    ///  by Highpoint                        last update: 2026-06-26  ///
+    ///  by Highpoint                        last update: 2026-08-20  ///
     ///                                                               ///
 	///  Revised by AmateurAudioDude                                  ///
     ///                                                               ///
@@ -96,7 +96,7 @@ async function fetchGrid(lat, lon, radiusKm) {
             lons.push(colLon.toFixed(2));
         }
     }
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&hourly=${buildHourlyParams()}&forecast_hours=${FORECAST_HOURS}&models=best_match`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&hourly=${buildHourlyParams()}&forecast_hours=${FORECAST_HOURS}&models=icon_eu`;
     const json = await httpGetJson(url, 'grid');
     let results = [];
     if (json.hourly) results = [json];
@@ -137,17 +137,18 @@ function calculateTropoIndexPrecise(hourly, idx) {
     let maxGradientMag = 0;
     let shearAtMaxGradient = 0;
 
-    for (let i = 0; i < PRESSURE_LEVELS.length - 1; i++) {
-        const lowerP = PRESSURE_LEVELS[i];
-        const upperP = PRESSURE_LEVELS[i + 1];
-        if (!hourly[`temperature_${lowerP}hPa`] || !hourly[`temperature_${upperP}hPa`]) continue;
+    const availableLevels = PRESSURE_LEVELS.filter(p => 
+        hourly[`temperature_${p}hPa`] && hourly[`temperature_${p}hPa`][idx] != null
+    );
+
+    for (let i = 0; i < availableLevels.length - 1; i++) {
+        const lowerP = availableLevels[i];
+        const upperP = availableLevels[i + 1];
 
         const tLow = hourly[`temperature_${lowerP}hPa`][idx];
         const rhLow = hourly[`relative_humidity_${lowerP}hPa`][idx];
         const tUp = hourly[`temperature_${upperP}hPa`][idx];
         const rhUp = hourly[`relative_humidity_${upperP}hPa`][idx];
-
-        if (tLow === undefined || tUp === undefined || rhLow === undefined || rhUp === undefined) continue;
 
         const nLow = calcN(tLow, rhLow, lowerP);
         const nUp = calcN(tUp, rhUp, upperP);
