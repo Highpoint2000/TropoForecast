@@ -3,7 +3,8 @@ Local and regional tropo forecast for FMDX web server
 
 ### This forecast is based on my own calculations and—aside from its color scheme and visual design—bears no resemblance to William R. Hepburn's forecast!
 
-![TropoForecast](https://github.com/user-attachments/assets/586405e1-68f0-4c88-97f3-87d4f2e6c9f4)
+<img width="1670" height="844" alt="Tropo" src="https://github.com/user-attachments/assets/52741619-901a-46d0-aa73-fd371a5ec012" />
+
 
 ## Version 2.0b
 
