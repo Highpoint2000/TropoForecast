@@ -1,8 +1,8 @@
     /////////////////////////////////////////////////////////////////////
     ///                                                               ///
-    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0b ///
+    ///  TROPO FORECAST (CLIENT MODUL) FOR FM-DX-WEBSERVER      V2.0c ///
     ///                                                               ///
-    ///  by Highpoint                        last update: 2026-08-20  ///
+    ///  by Highpoint                        last update: 2026-08-31  ///
     ///                                                               ///
 	///  Revised by AmateurAudioDude                                  ///
     ///                                                               ///
@@ -958,7 +958,7 @@
             #tropo-map-container { position:relative; z-index:1; }
             #tropo-map-container .leaflet-pane { z-index:auto; }
             #tropo-map-container .leaflet-top, #tropo-map-container .leaflet-bottom { z-index:2; }
-            .high-contrast-map { filter: brightness(3.8) contrast(1.18) !important; } /* // AAD */
+            .high-contrast-map { filter: invert(100%) grayscale(100%) brightness(125%) contrast(110%) !important; }
             #tropo-content { padding:5px; background:#0a0a0a; border-top:1px solid #222; max-height:500px; overflow-y:auto; position:relative; z-index:10000; }
             input[type=range].tropo-slider { -webkit-appearance:none; width:100%; background:transparent; margin:0; }
             input[type=range].tropo-slider:focus { outline:none; }
@@ -1075,9 +1075,9 @@
             scrollWheelZoom: false, dragging: false, touchZoom: false, doubleClickZoom: false
         });
 
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
-            maxZoom: 19, subdomains: 'abcd', className: 'high-contrast-map'
-        }).addTo(mapInstance);
+		L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+			maxZoom: 19, className: 'high-contrast-map'
+		}).addTo(mapInstance);
 
         L.CanvasOverlay = L.Layer.extend({
             onAdd(map) {

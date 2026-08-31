@@ -6,11 +6,9 @@ Local and regional tropo forecast for FMDX web server
 <img width="1670" height="844" alt="Tropo" src="https://github.com/user-attachments/assets/52741619-901a-46d0-aa73-fd371a5ec012" />
 
 
-## Version 2.0b
+## Version 2.0c
 
-- Switched the Open-Meteo API query from best_match to icon_eu to ensure the model provides sufficient geographical coverage for the 500km radius, eliminating edge-clamping and duplicate horizontal/vertical data bands
-- Replaced the standard Hepburn-style rainbow colors with a custom, highly visible thermal color scale. This provides far better contrast against the dark base map, especially for lower-level values
-- Overhauled the legend labels to use practical signal propagation terms instead of generic weather qualities
+- Switching the map to openstreetmap.org
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
@@ -33,6 +31,13 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.0b
+
+- Switched the Open-Meteo API query from best_match to icon_eu to ensure the model provides sufficient geographical coverage for the 500km radius, eliminating edge-clamping and duplicate horizontal/vertical data bands
+- Replaced the standard Hepburn-style rainbow colors with a custom, highly visible thermal color scale. This provides far better contrast against the dark base map, especially for lower-level values
+- Overhauled the legend labels to use practical signal propagation terms instead of generic weather qualities
+
 
 ### Version 2.0a
 

@@ -1,8 +1,8 @@
     /////////////////////////////////////////////////////////////////////
     ///                                                               ///
-    ///  TROPO FORECAST (SERVER MODUL) FOR FM-DX-WEBSERVER      V2.0b ///
+    ///  TROPO FORECAST (SERVER MODUL) FOR FM-DX-WEBSERVER      V2.0c ///
     ///                                                               ///
-    ///  by Highpoint                        last update: 2026-08-20  ///
+    ///  by Highpoint                        last update: 2026-08-31  ///
     ///                                                               ///
 	///  Revised by AmateurAudioDude                                  ///
     ///                                                               ///
