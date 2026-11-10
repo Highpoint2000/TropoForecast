@@ -6,9 +6,9 @@ Local and regional tropo forecast for FMDX web server
 <img width="1670" height="844" alt="Tropo" src="https://github.com/user-attachments/assets/52741619-901a-46d0-aa73-fd371a5ec012" />
 
 
-## Version 2.0c
+## Version 2.0d
 
-- Switching the map to openstreetmap.org
+- Added a configuration switch (`WEATHER_MODEL`) in the server script to flexibly choose the underlying weather model (e.g., 'icon_eu', 'gfs_seamless', 'bom_access_global', or 'best_match') for better global compatibility.
 
 ## Important note
 This plugin provides a very reliable trend and probabilities for Tropo DX. However, due to purely technical reasons (resolution of global weather models), a 100% guarantee of forecast reliability cannot be given. It is still recommended to consult forecasts such as Hepburn.
@@ -16,7 +16,7 @@ This plugin provides a very reliable trend and probabilities for Tropo DX. Howev
 ## Installation notes
 
 1. [Download](https://github.com/Highpoint2000/TropoForecast/releases) the last repository as a zip
-2. Unpack all files from the plugins folder to ..fm-dx-webserver-main\plugins\ 
+​2. Unpack all files from the plugins folder to ..fm-dx-webserver-main\plugins\ 
 3. Stop or close the fm-dx-webserver
 4. Start/Restart the fm-dx-webserver with "npm run webserver" on node.js console, check the console informations
 5. Activate the TropoForecast plugin in the settings
@@ -31,6 +31,10 @@ If you have any questions, would like to report problems, or have suggestions fo
 
 <details>
 <summary>History</summary>
+
+### Version 2.0c
+
+- Switching the map to openstreetmap.org
 
 ### Version 2.0b
 
@@ -75,3 +79,5 @@ Many thanks to AmateurAudioDude for this code improvements!
 - Searches for strongly superrefractive gradients (threshold ~ −60 N/km instead of just "something below −39 N/km")
 - Additionally considers wind shear in the layer with the strongest gradient, including conversion of direction/speed to u/v components
 - Cleanly scales the result to a 0–10 index (based on Hepburn)
+
+</details>
